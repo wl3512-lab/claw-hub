@@ -1,6 +1,6 @@
 // The playpen: every live session is a critter that goes to the spot that matches what it's doing.
 (function () {
-  const { pixelCritter, hueFor, prop, emptyShell, SHELLS } = window.Critter;
+  const { pixelCritter, hueFor, prop, emptyShell, SHELLS, lookFor, crab } = window.Critter;
 
   const READ_TOOLS = /^(Read|Grep|Glob|LS|WebFetch|WebSearch|NotebookRead)$/;
   const ASLEEP_AFTER = 20 * 60 * 1000;
@@ -12,6 +12,7 @@
   function base(p) { return /^[~\/]/.test(p) && !/\s/.test(p) ? p.split('/').pop() : p; }
   function sayFor(c, st) {
     const a = (c.live && c.live.activity) || {};
+    if (c.live.parked) return `parked in ${c.live.where}. send me a message to wake me up`;
     if (st.pose === 'tired') return `out of juice. back ${a.limit && a.limit.at ? 'at ' + a.limit.at : 'later'}`;
     if (st.zone === 'gate') return a.kind === 'tool' ? 'i have a question for you' : `"${short(a.text, 60)}"`;
     if (st.pose === 'nap') return 'zzz… your turn whenever';
@@ -28,6 +29,7 @@
     const l = c.live;
     const a = l.activity || {};
     const s = { pose: 'idle', zone: 'play', label: '', fx: null, pct: a.ctxPct || null, limit: a.limit || null };
+    if (l.parked) return { ...s, pose: 'nap', zone: 'bed', fx: 'zz', label: `parked in ${l.where}` };
     if (a.limit) return { ...s, pose: 'tired', zone: 'bed', fx: 'limit', label: `limit · back ${a.limit.at || 'later'}` };
     if (l.status === 'busy') {
       if (a.kind === 'tool' && READ_TOOLS.test(a.tool)) return { ...s, pose: 'read', zone: 'library', label: a.text };
@@ -115,7 +117,7 @@
   }
 
   function spriteHtml(c, conv, pose) {
-    return pixelCritter(pose, hueFor(conv.cwd || conv.id), 96);
+    return crab(conv, pose, 96);
   }
 
   function render(convos, now) {
@@ -166,7 +168,7 @@
       }
       const moving = Date.now() < c.movingUntil;
       const pose = moving ? 'walk' : st.pose;
-      const key = `${pose}|${st.fx}|${st.pct}|${conv.title}|${c.facing}`;
+      const key = `${pose}|${st.fx}|${st.pct}|${conv.title}|${c.facing}|${conv.hue}|${conv.shell}`;
       if (key !== c.key) {
         c.key = key;
         c.el.className = `crab z-${c.zone} p-${st.pose}${moving ? ' moving' : ''}`;
@@ -213,7 +215,7 @@
     b.key = key;
     b.el.className = `crab baby s-${b.h.status}${Date.now() < b.movingUntil ? ' moving' : ''}${b.hatching ? ' hatch' : ''}`;
     const spr = b.el.querySelector('.spr');
-    spr.innerHTML = pixelCritter(pose, b.hue, 48);
+    spr.innerHTML = pixelCritter(pose, b.hue, 48, false, b.shell);
     spr.style.transform = b.h.status === 'stuck' ? 'rotate(180deg)' : b.facing < 0 ? 'scaleX(-1)' : '';
     b.el.querySelector('.fxs').innerHTML = b.h.status === 'stuck' ? '<span class="fx q bad">!</span>' : b.h.status === 'done' ? '<span class="fx scroll"></span>' : '';
   }
@@ -236,7 +238,7 @@
           el.innerHTML = '<span class="say"></span><span class="fxs"></span><span class="spr"></span><span class="tag"></span>';
           el.querySelector('.tag').textContent = h.description.length > 22 ? h.description.slice(0, 21) + '…' : h.description;
           container.appendChild(el);
-          b = { el, x: mom.x, y: mom.y, facing: 1, movingUntil: 0, key: '', hue: hueFor(conv.cwd || conv.id), h, conv, hatching: true };
+          b = { el, x: mom.x, y: mom.y, facing: 1, movingUntil: 0, key: '', hue: lookFor(conv).hue, shell: lookFor(conv).shell, h, conv, hatching: true };
           babies.set(key, b);
           place(b);
           b.el.style.zIndex = String(Math.round(mom.y) + 2);
@@ -247,6 +249,8 @@
         const ring = ringIndex(conv, h);
         const ringChanged = b.ring && (b.ring[0] !== ring[0] || b.ring[1] !== ring[1]);
         b.h = h; b.conv = conv; b.ring = ring;
+        const lk = lookFor(conv);
+        if (lk.hue !== b.hue || lk.shell !== b.shell) { b.hue = lk.hue; b.shell = lk.shell; b.key = ''; }
         const bsay = h.status === 'stuck' ? `stuck on: ${short(h.description, 40)}. help?` : h.status === 'done' ? 'done! bringing it home' : `${h.tool ? (VERBS[h.tool] || h.tool.toLowerCase()) : 'working on'} · ${short(h.description, 36)}`;
         const bs = b.el.querySelector('.say');
         if (bs.textContent !== bsay) bs.textContent = bsay;
@@ -318,8 +322,9 @@
   }, 2600);
 
   // ---------- tips ----------
-  function tips(convos, now) {
+  function tips(all, now) {
     const out = [];
+    const convos = all.filter((c) => !c.live.parked);
     const limit = convos.map((c) => c.live.activity && c.live.activity.limit).find(Boolean);
     if (limit) out.push({ kind: 'limit', text: `usage limit hit. claude picks back up ${limit.at ? 'at ' + limit.at : 'later'}.` });
     for (const c of convos) {

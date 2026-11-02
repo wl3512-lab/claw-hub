@@ -43,6 +43,7 @@ cat > "$PLIST" <<PL
   <key>EnvironmentVariables</key><dict><key>PATH</key><string>$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>AbandonProcessGroup</key><true/>
   <key>StandardOutPath</key><string>$HUB/data/server.log</string>
   <key>StandardErrorPath</key><string>$HUB/data/server.log</string>
 </dict></plist>

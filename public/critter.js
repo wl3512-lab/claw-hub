@@ -269,5 +269,12 @@
     return `<svg class="prop" viewBox="0 0 18 16" width="${18 * scale}" height="${16 * scale}" shape-rendering="crispEdges">${rects(out, pal)}</svg>`;
   }
 
-  window.Critter = { pixelCritter, hueFor, prop, emptyShell, SHELLS, frames, palette, rects, SPRITE_W: W, SPRITE_H: H };
+  // a chat's crab look: your picked color/shell, else one derived from its folder
+  function lookFor(conv) {
+    const base = hueFor((conv && (conv.cwd || conv.id)) || '');
+    return { hue: conv && Number.isInteger(conv.hue) ? conv.hue : base, shell: (conv && conv.shell) || SHELLS[base % SHELLS.length] };
+  }
+  function crab(conv, mood, size, still) { const l = lookFor(conv); return pixelCritter(mood, l.hue, size, still, l.shell); }
+
+  window.Critter = { lookFor, crab, pixelCritter, hueFor, prop, emptyShell, SHELLS, frames, palette, rects, SPRITE_W: W, SPRITE_H: H };
 })();

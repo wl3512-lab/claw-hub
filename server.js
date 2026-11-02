@@ -9,6 +9,9 @@ const { execFile } = require('child_process');
 const t = require('./lib/transcripts');
 const hub = require('./lib/hub-chats');
 const skills = require('./lib/skills');
+const jobs = require('./lib/jobs');
+const logbook = require('./lib/logbook');
+const imsg = require('./lib/imessage');
 
 const PORT = Number(process.env.CLAW_HUB_PORT || 4777);
 const PUBLIC = path.join(__dirname, 'public');
@@ -67,6 +70,142 @@ function focusTty(tty) {
   );
 }
 
+// ---------- hub chats + jobs ----------
+const expandHome = (p) => String(p || process.env.HOME).replace(/^~(?=\/|$)/, process.env.HOME);
+
+// start a new hub chat and record its project / labels
+async function startHubChat({ cwd, prompt, group, images, label }) {
+  const id = await hub.start({ cwd, prompt, images });
+  const st = readState();
+  const cur = { ...(st.convos[id] || {}), hub: true };
+  if (group && st.groups.some((g) => g.id === group)) cur.group = group;
+  if (label) cur.label = label;
+  st.convos[id] = cur;
+  writeState(st);
+  return id;
+}
+
+async function runJob(j, scheduled) {
+  const cwd = expandHome(j.cwd);
+  if (!isDir(cwd)) { jobs.update(j.id, { status: 'todo', error: `folder not found: ${j.cwd}` }); return null; }
+  const id = await startHubChat({ cwd, prompt: jobs.promptFor(j), group: j.group, label: `${scheduled ? '⏰ ' : ''}${j.title}` });
+  jobs.markRun(j.id, id, scheduled);
+  jobs.update(j.id, { error: null });
+  return id;
+}
+
+const jobBusy = new Set(); // job ids being started right now
+async function jobTick() {
+  const list = jobs.load();
+  const live = allLive();
+  const state = readState();
+  const now = new Date();
+  for (const j of list) {
+    if (jobBusy.has(j.id)) continue;
+    // finished runs: the run's chat went idle (or closed) after it started
+    if (j.status === 'running' && j.sessionId) {
+      const l = live.find((x) => x.sessionId === j.sessionId);
+      const run = (j.runs || []).slice(-1)[0] || {};
+      if (!l || (l.status === 'idle' && (l.statusSince || 0) > (run.at || 0) + 1500)) {
+        jobs.update(j.id, { status: j.schedule ? 'todo' : 'done', doneAt: Date.now() });
+        if (run.scheduled && l && l.entrypoint === 'hub') hub.stop(j.sessionId); // keep the transcript, free the process
+      }
+      continue;
+    }
+    // scheduled
+    if (j.schedule) {
+      const due = jobs.lastDue(j.schedule, now);
+      if (due && due > (j.lastDueRun || 0) && Date.now() - due < 6 * 3600 * 1000) {
+        jobs.update(j.id, { lastDueRun: due });
+        jobBusy.add(j.id);
+        runJob(j, true).catch((e) => jobs.update(j.id, { error: e.message })).finally(() => jobBusy.delete(j.id));
+        continue;
+      }
+    }
+    // queued: start when its project has no working crab
+    if (j.queue && j.status === 'todo') {
+      const busyHere = live.some((l) => l.status === 'busy' && (!j.group || (state.convos[l.sessionId] || {}).group === j.group));
+      if (!busyHere) {
+        jobBusy.add(j.id);
+        runJob(j, false).catch((e) => jobs.update(j.id, { error: e.message })).finally(() => jobBusy.delete(j.id));
+      }
+    }
+  }
+}
+setInterval(() => { jobTick().catch((e) => console.error('[claw-hub] jobs', e)); }, 30000);
+
+// logbook: today's page is cached for 2 min; the nightly copy is written at 23:30
+let todayBook = null;
+function logbookFor(day, fresh) {
+  const today = logbook.dayKey(Date.now());
+  if (day === today && !fresh && todayBook && Date.now() - todayBook.builtAt < 120000) return todayBook;
+  const book = logbook.get(day, readState(), allLive(), { fresh });
+  if (day === today) todayBook = book;
+  return book;
+}
+// ---------- iMessage pings + replies ----------
+function titleOf(sid) {
+  const s = readState().convos[sid] || {};
+  const m = t.findTranscript(sid);
+  return s.label || (m && (m.customTitle || m.aiTitle || (m.firstPrompt || '').slice(0, 50))) || 'a crab';
+}
+const lastStatus = new Map();
+setInterval(async () => {
+  const cfg = imsg.config();
+  if (!cfg.enabled || !cfg.handle) return;
+  for (const l of allLive()) {
+    const before = lastStatus.get(l.sessionId);
+    lastStatus.set(l.sessionId, l.status);
+    if (before !== 'busy' || l.status !== 'idle') continue;
+    const meta = t.findTranscript(l.sessionId);
+    if (!meta || (meta.bot && !(readState().convos[l.sessionId] || {}).hub)) continue;
+    const a = t.activity(meta) || {};
+    const asking = !!a.asking;
+    if ((asking && !cfg.onAsk) || (!asking && !cfg.onDone)) continue;
+    if (cfg.onlyAway && imsg.idleSeconds() < 120) continue;
+    const n = imsg.numFor(l.sessionId);
+    const said = String(a.text || '').replace(/\s+/g, ' ').slice(0, 140);
+    try {
+      await imsg.send(`${imsg.TAG} #${n} ${titleOf(l.sessionId)} ${asking ? 'asks' : 'is done'}: ${said}\n(reply here, or "#${n} …")`);
+      imsg.saveConfig({ last: l.sessionId });
+    } catch (e) { console.error('[claw-hub] imessage', e.message); }
+  }
+}, 4000);
+
+setInterval(async () => {
+  const cfg = imsg.config();
+  if (!cfg.enabled || !cfg.handle) return;
+  let replies = [];
+  try { replies = imsg.newReplies(); } catch (e) { console.error('[claw-hub] imessage read', e.message); return; }
+  for (const raw of replies) {
+    const { num, text } = imsg.parseReply(raw);
+    const sid = num ? imsg.sessionForNum(num) : cfg.last;
+    const n = sid && imsg.numFor(sid);
+    try {
+      if (!sid) { await imsg.send(`${imsg.TAG} which crab is that for? start with #number`); continue; }
+      if (hub.has(sid)) { hub.send(sid, text); await imsg.send(`${imsg.TAG} sent to #${n} ${titleOf(sid)}`); continue; }
+      const live = t.listLive().find((l) => l.sessionId === sid);
+      if (live) { await imsg.send(`${imsg.TAG} #${n} is open in ${live.entrypoint === 'claude-vscode' ? 'VS Code' : live.entrypoint === 'claude-desktop' ? 'the Claude app' : 'Terminal'}, answer it there`); continue; }
+      const meta = t.findTranscript(sid);
+      if (!meta || !isDir(meta.cwd)) { await imsg.send(`${imsg.TAG} couldn't find #${n} anymore`); continue; }
+      await hub.start({ cwd: meta.cwd, prompt: text, resumeId: sid });
+      { const st = readState(); st.convos[sid] = { ...(st.convos[sid] || {}), hub: true }; writeState(st); }
+      await imsg.send(`${imsg.TAG} woke #${n} ${titleOf(sid)} in the hub and sent it`);
+    } catch (e) { console.error('[claw-hub] imessage route', e.message); }
+  }
+}, 5000);
+
+let nightlyDone = '';
+setInterval(() => {
+  const now = new Date();
+  const key = logbook.dayKey(now);
+  if (now.getHours() === 23 && now.getMinutes() >= 30 && nightlyDone !== key) {
+    nightlyDone = key;
+    try { logbookFor(key, true); } catch (e) { console.error('[claw-hub] logbook', e); }
+  }
+}, 60000);
+setTimeout(() => jobTick().catch(() => {}), 5000);
+
 // ---------- API ----------
 function allLive() {
   const mine = hub.list().filter((h) => h.sessionId);
@@ -100,6 +239,8 @@ function convoSummary(m, state, liveBySession) {
     archived: !!s.archived,
     note: s.note || '',
     group: s.group || null,
+    hue: Number.isInteger(s.hue) ? s.hue : null,
+    shell: s.shell || null,
     cwd: m.cwd,
     firstPrompt: m.firstPrompt,
     lastPrompt: m.lastPrompt,
@@ -109,6 +250,10 @@ function convoSummary(m, state, liveBySession) {
     bot: m.bot && !s.hub,
     size: m.size,
     live: live ? liveInfo(live, m) : null,
+    // VS Code and the Claude app stop an idle chat's process and restart it on your next message:
+    // show recently active chats with no process as "parked"
+    parked: !live && !(m.bot && !s.hub) && Date.now() - m.updatedAt < 3 * 3600 * 1000
+      ? { where: s.hub ? 'hub' : m.entrypoint || 'cli', since: m.updatedAt, activity: t.activity(m) } : null,
   };
 }
 
@@ -171,6 +316,8 @@ async function handleApi(req, res, url) {
     const cur = state.convos[b.id] || {};
     for (const k of ['label', 'note']) if (typeof b[k] === 'string') cur[k] = b[k].slice(0, 500) || undefined;
     for (const k of ['pinned', 'archived']) if (typeof b[k] === 'boolean') cur[k] = b[k];
+    if (b.hue === null) delete cur.hue; else if (Number.isInteger(b.hue) && b.hue >= 0 && b.hue < 360) cur.hue = b.hue;
+    if (b.shell === null) delete cur.shell; else if (['spiral', 'conch', 'moon', 'tower'].includes(b.shell)) cur.shell = b.shell;
     if (typeof b.group === 'string') cur.group = state.groups.some((g) => g.id === b.group) ? b.group : undefined;
     state.convos[b.id] = cur;
     writeState(state);
@@ -241,6 +388,70 @@ async function handleApi(req, res, url) {
     }
     writeState(state);
     return send(res, 200, { ok: true });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/settings') {
+    const c = imsg.config();
+    return send(res, 200, { imessage: { handle: c.handle, enabled: c.enabled, onAsk: c.onAsk, onDone: c.onDone, onlyAway: c.onlyAway }, canRead: imsg.canRead(), node: process.execPath });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/settings') {
+    const b = await readBody(req);
+    const i = b.imessage || {};
+    const patch = {};
+    if (typeof i.handle === 'string') patch.handle = i.handle.trim().slice(0, 120);
+    for (const k of ['enabled', 'onAsk', 'onDone', 'onlyAway']) if (typeof i[k] === 'boolean') patch[k] = i[k];
+    imsg.saveConfig(patch);
+    return send(res, 200, { ok: true });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/imessage/test') {
+    try { await imsg.send(`${imsg.TAG} hi from claw hub. crabs will text you here when they finish or ask you something.`); return send(res, 200, { ok: true }); }
+    catch (e) { return send(res, 200, { ok: false, error: e.message }); }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/logbook') {
+    return send(res, 200, { days: logbook.days() });
+  }
+  const logMatch = url.pathname.match(/^\/api\/logbook\/(\d{4}-\d{2}-\d{2})$/);
+  if (req.method === 'GET' && logMatch) {
+    return send(res, 200, logbookFor(logMatch[1], url.searchParams.get('fresh') === '1'));
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/jobs') {
+    const now = new Date();
+    return send(res, 200, { jobs: jobs.load().map((j) => ({ ...j, scheduleText: jobs.scheduleText(j.schedule), nextRun: j.schedule ? jobs.nextDue(j.schedule, now) : null })) });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/jobs') {
+    const b = await readBody(req, 2e6);
+    return send(res, 200, { ok: true, job: jobs.upsert(b) });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/jobs/delete') {
+    const b = await readBody(req);
+    jobs.remove(String(b.id || ''));
+    return send(res, 200, { ok: true });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/jobs/run') {
+    const b = await readBody(req);
+    const j = jobs.load().find((x) => x.id === b.id);
+    if (!j) return send(res, 404, { error: 'no such job' });
+    if (b.target) {
+      // hand the note to an existing crab
+      if (!UUID.test(b.target)) return send(res, 400, { error: 'bad target' });
+      const prompt = jobs.promptFor(j);
+      if (hub.has(b.target)) {
+        try { hub.send(b.target, prompt); } catch (e) { return send(res, 409, { error: e.message }); }
+        jobs.markRun(j.id, b.target, false);
+        return send(res, 200, { ok: true, id: b.target, how: 'sent' });
+      }
+      const live = t.listLive().find((l) => l.sessionId === b.target);
+      jobs.markRun(j.id, b.target, false);
+      return send(res, 200, { ok: true, id: b.target, how: 'copy', prompt, pid: live && live.pid });
+    }
+    try {
+      jobBusy.add(j.id);
+      const id = await runJob(j, false);
+      if (!id) return send(res, 400, { error: `folder not found: ${j.cwd}` });
+      return send(res, 200, { ok: true, id, how: 'new' });
+    } catch (e) { return send(res, 500, { error: e.message }); } finally { jobBusy.delete(j.id); }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/chat/start') {
@@ -348,6 +559,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { hub.stopAll(); process.exit(0); });
+// in-hub chats are detached and keep running; a restarted server reconnects to them
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => process.exit(0));
 
 server.listen(PORT, '127.0.0.1', () => console.log(`[claw-hub] http://127.0.0.1:${PORT}`));

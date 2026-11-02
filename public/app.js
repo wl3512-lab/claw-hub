@@ -1,6 +1,6 @@
 'use strict';
 const $ = (s) => document.querySelector(s);
-const { pixelCritter, hueFor } = window.Critter;
+const { pixelCritter, hueFor, crab, lookFor, SHELLS, emptyShell } = window.Critter;
 
 const ui = {
   view: 'room', prevView: 'room', sel: null, convos: [], groups: [], filter: 'all', q: '',
@@ -49,11 +49,17 @@ function activityText(live) {
 const groupById = (id) => ui.groups.find((g) => g.id === id);
 const cur = () => ui.convos.find((x) => x.id === ui.sel);
 const liveOnes = () => ui.convos.filter((c) => c.live && !c.bot);
+const PARK_WHERE = { 'claude-vscode': 'vs code', 'claude-desktop': 'claude app', cli: 'terminal', hub: 'here', 'sdk-cli': 'here' };
+// parked chats get a stand-in live record so the pen can draw them napping
+const parkedOnes = () => ui.convos.filter((c) => c.parked && !c.live && !c.archived).map((c) => ({
+  ...c, live: { parked: true, where: PARK_WHERE[c.parked.where] || c.parked.where, status: 'parked', statusSince: c.parked.since, activity: c.parked.activity || {}, helpers: [] },
+}));
 
 const stillCache = new Map();
 function stillCritter(c) {
-  const key = `${mood(c)}|${c.cwd}`;
-  if (!stillCache.has(key)) stillCache.set(key, pixelCritter(mood(c), hueFor(c.cwd || c.id), 34, true));
+  const l = lookFor(c);
+  const key = `${mood(c)}|${l.hue}|${l.shell}`;
+  if (!stillCache.has(key)) stillCache.set(key, crab(c, mood(c), 34, true));
   return stillCache.get(key);
 }
 
@@ -64,6 +70,8 @@ function show(view) {
   $('#vRoom').classList.toggle('hidden', view !== 'room');
   $('#vChats').classList.toggle('hidden', view !== 'chats');
   $('#vChat').classList.toggle('hidden', view !== 'chat');
+  $('#vLog').classList.toggle('hidden', view !== 'log');
+  if (view === 'log') { ui.sel = null; history.replaceState(null, '', '#'); window.LogView.open(); }
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.go === view));
   if (view !== 'chat') leaveSub();
   if (view === 'room') { ui.sel = null; history.replaceState(null, '', '#'); renderRoom(); }
@@ -100,14 +108,16 @@ function notifyChanges() {
 let penBuilt = false;
 function renderRoom() {
   if (!penBuilt) { window.Pen.buildPen($('#pen')); penBuilt = true; }
-  const live = liveOnes();
+  const live = liveOnes().filter((c) => !window.inTank || window.inTank(c));
+  const parked = parkedOnes().filter((c) => !window.inTank || window.inTank(c));
+  if (window.Board) window.Board.render();
   const now = Date.now();
   const busy = live.filter((c) => c.live.status === 'busy').length;
   const waiting = live.length - busy;
   setHtml($('#roomSummary'), live.length
-    ? `<span class="g"><b>${waiting}</b> waiting for you</span> · <span class="p"><b>${busy}</b> working</span>`
-    : 'the pen is empty. start one with + new');
-  window.Pen.render(live, now);
+    ? `<span class="g"><b>${waiting}</b> waiting for you</span> · <span class="p"><b>${busy}</b> working</span>${parked.length ? ` · <b>${parked.length}</b> parked` : ''}`
+    : parked.length ? `<b>${parked.length}</b> parked · nothing running right now` : 'the pen is empty. start one with + new');
+  window.Pen.render(live.concat(parked), now);
   const tips = window.Pen.tips(live, now);
   const btn = (t, a) => {
     if (a === 'compact') return `<button class="btn" data-tip="compact" data-id="${t.id}" title="ask it to /compact">compact</button>`;
@@ -119,7 +129,7 @@ function renderRoom() {
   setHtml($('#tips'), tips.length
     ? tips.map((t) => `<div class="tip tip-${t.kind}"><p>${esc(t.text)}</p>${(t.actions || []).length ? `<div class="tip-acts">${t.actions.map((a) => btn(t, a)).join('')}</div>` : ''}</div>`).join('')
     : '<p class="tip-none">all calm. nothing needs you.</p>');
-  const naps = ui.convos.filter((c) => !c.live && !c.bot && !c.archived && !c.empty && Date.now() - c.updatedAt < 86400000).length;
+  const naps = ui.convos.filter((c) => !c.live && !c.parked && !c.bot && !c.archived && !c.empty && Date.now() - c.updatedAt < 86400000).length;
   $('#napsLink').classList.toggle('hidden', !naps);
   $('#napsLink').textContent = `${naps} closed chat${naps === 1 ? '' : 's'} from today →`;
 }
@@ -206,7 +216,8 @@ function renderList() {
 // ---------- one chat ----------
 function renderHead(c) {
   const m = mood(c);
-  setHtml($('#chatCritter'), pixelCritter(m, hueFor(c.cwd || c.id), 46));
+  setHtml($('#chatCritter'), crab(c, m, 46));
+  renderLookPicker(c);
   const h1 = $('#cTitle');
   if (document.activeElement !== h1) h1.textContent = c.title;
   const g = groupById(c.group);
@@ -300,7 +311,7 @@ function openSub(key) {
   ui.sel = sid; ui.sub = aid; ui.limit = 250;
   show('chat');
   const h = ((mom && mom.live && mom.live.helpers) || []).find((x) => x.id === aid) || {};
-  setHtml($('#chatCritter'), pixelCritter(h.status === 'stuck' ? 'tired' : 'read', hueFor((mom && mom.cwd) || sid), 30));
+  setHtml($('#chatCritter'), crab(mom || { id: sid }, h.status === 'stuck' ? 'tired' : 'read', 30));
   $('#cTitle').textContent = h.description || 'baby crab';
   $('#cTitle').contentEditable = 'false';
   setHtml($('#cSub'), `baby of <b>${esc(mom ? mom.title : 'a session')}</b> · ${esc(h.type || 'subagent')} · ${esc(h.status === 'stuck' ? 'stuck' : h.status === 'done' ? 'done' : 'working')}`);
@@ -368,6 +379,51 @@ async function closeSession(id) {
   if (!confirm(`close "${c.title}"?\n\nthe chat stays saved and you can continue it later.${warn}`)) return;
   try { await api('/api/stop', { id }); toast('closed. still saved.'); setTimeout(refresh, 600); } catch (e) { toast(e.message); }
 }
+
+// ---------- crab look picker ----------
+const HUES = [0, 18, 36, 54, 90, 130, 165, 190, 210, 235, 260, 285, 310, 335];
+function lookHtml(c) {
+  const l = lookFor(c);
+  const custom = Number.isInteger(c.hue);
+  return `<div class="look-h">crab color</div>
+    <div class="swatches">${HUES.map((h) => `<button type="button" class="sw-btn ${custom && c.hue === h ? 'on' : ''}" data-hue="${h}" style="background:hsl(${h} 80% 66%)" title="hue ${h}"></button>`).join('')}
+    <button type="button" class="sw-btn auto ${custom ? '' : 'on'}" data-hue="auto" title="automatic (from its folder)">A</button></div>
+    <div class="look-h">shell</div>
+    <div class="shells">${SHELLS.map((s) => `<button type="button" class="sh-btn ${l.shell === s ? 'on' : ''}" data-shell="${s}" title="${s}">${emptyShell(s, l.hue, 2)}</button>`).join('')}</div>`;
+}
+function renderLookPicker(c) {
+  const box = document.querySelector('#moreMenu [data-look]');
+  if (box) setHtml(box, lookHtml(c));
+}
+let lookTarget = null;
+function openLookPop(id, x, y) {
+  const c = ui.convos.find((v) => v.id === id); if (!c) return;
+  lookTarget = id;
+  const pop = $('#lookPop');
+  $('#lookPopTitle').textContent = c.title;
+  setHtml(pop.querySelector('[data-look]'), lookHtml(c));
+  pop.classList.remove('hidden');
+  pop.style.left = Math.min(x, innerWidth - 230) + 'px';
+  pop.style.top = Math.min(y, innerHeight - 200) + 'px';
+}
+function closeLookPop() { $('#lookPop').classList.add('hidden'); lookTarget = null; }
+document.addEventListener('click', (e) => {
+  const sw = e.target.closest('[data-hue], [data-shell]');
+  if (!sw) { if (!e.target.closest('#lookPop')) closeLookPop(); return; }
+  e.stopPropagation();
+  const id = sw.closest('#lookPop') ? lookTarget : ui.sel;
+  const c = ui.convos.find((v) => v.id === id); if (!c) return;
+  const patch = sw.dataset.shell ? { shell: sw.dataset.shell } : { hue: sw.dataset.hue === 'auto' ? null : Number(sw.dataset.hue) };
+  setState(patch, id);
+  if (sw.closest('#lookPop')) setHtml($('#lookPop [data-look]'), lookHtml(c));
+  if (ui.view === 'room') renderRoom();
+}, true);
+document.addEventListener('contextmenu', (e) => {
+  const cr = e.target.closest('.crab:not(.baby)');
+  if (!cr) return;
+  e.preventDefault();
+  openLookPop(cr.dataset.id, e.clientX, e.clientY);
+});
 
 // ---------- sending ----------
 function autosize(el) { el.style.height = 'auto'; el.style.height = Math.min(220, el.scrollHeight) + 'px'; }

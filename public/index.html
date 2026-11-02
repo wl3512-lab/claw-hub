@@ -17,19 +17,31 @@
   <nav class="tabs">
     <button data-go="room" class="on">room <span id="tabRoomCount" class="n"></span></button>
     <button data-go="chats">chats</button>
+    <button data-go="log">logbook</button>
   </nav>
+  <button class="btn icon" id="setBtn" title="settings">⚙</button>
   <button class="btn primary" id="newBtn" title="Start a new chat (N)">+ new</button>
 </header>
 
 <!-- ROOM -->
 <main class="view" id="vRoom">
-  <p class="summary" id="roomSummary"></p>
+  <div class="room-top">
+    <nav class="tanks" id="tanks"></nav>
+    <p class="summary" id="roomSummary"></p>
+  </div>
   <div class="room-grid">
     <div class="pen" id="pen"></div>
-    <aside class="tips">
-      <h2>notes from the pen</h2>
-      <div id="tips"></div>
-    </aside>
+    <div class="side-col">
+      <aside class="board-panel">
+        <div class="board-head"><h2>job board</h2><button class="btn" id="addNote">+ note</button></div>
+        <div id="board"></div>
+        <p class="board-hint">drag a note onto a crab to hand it over, or onto the floor to hire a new crab</p>
+      </aside>
+      <aside class="tips">
+        <h2>notes from the pen</h2>
+        <div id="tips"></div>
+      </aside>
+    </div>
   </div>
   <button class="naps-link hidden" id="napsLink"></button>
 </main>
@@ -41,6 +53,12 @@
     <select id="filter" title="Show"></select>
   </div>
   <div class="list" id="list"></div>
+</main>
+
+<!-- LOGBOOK -->
+<main class="view hidden" id="vLog">
+  <nav class="log-days" id="logDays"></nav>
+  <section class="log-page" id="logPage"></section>
 </main>
 
 <!-- ONE CHAT -->
@@ -56,6 +74,7 @@
     <div class="more">
       <button class="btn icon" id="moreBtn" title="More">⋯</button>
       <div class="menu hidden" id="moreMenu">
+        <div class="look" data-look></div>
         <button data-act="enhance">enhance with a skill…</button>
         <button data-act="pin">pin</button>
         <button data-act="note">add a note</button>
@@ -125,9 +144,61 @@
   </form>
 </dialog>
 
+<dialog id="setDlg">
+  <form method="dialog" id="setForm">
+    <h2>imessage pings</h2>
+    <p class="dlg-hint">crabs text you when they finish or ask you something. reply in that thread to answer the last crab, or start with #number to pick one.</p>
+    <label class="dlg-lbl">your iMessage phone number or Apple ID email
+      <input id="imHandle" placeholder="+1 604 555 0123 or you@icloud.com" autocomplete="off">
+    </label>
+    <label class="check"><input type="checkbox" id="imOn"> turn pings on</label>
+    <label class="check"><input type="checkbox" id="imAsk"> when a crab asks me something</label>
+    <label class="check"><input type="checkbox" id="imDone"> when a crab finishes</label>
+    <label class="check"><input type="checkbox" id="imAway"> only when I've been away from the Mac 2+ minutes</label>
+    <p class="dlg-hint" id="imRead" style="margin-top:12px"></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn" id="imTest">send a test</button>
+      <span style="flex:1"></span>
+      <button class="btn" value="cancel" formnovalidate>cancel</button>
+      <button class="btn primary" value="save">save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="jobDlg">
+  <form method="dialog" id="jobForm">
+    <h2 id="jobDlgTitle">new note</h2>
+    <input id="jTitle" placeholder="short name, like 'check brightspace'" maxlength="80" autocomplete="off">
+    <textarea id="jPrompt" rows="4" placeholder="what the crab should do (leave empty to use the name)" style="margin-top:8px"></textarea>
+    <div class="dlg-row">
+      <label>project <select id="jGroup"></select></label>
+      <label>folder <input id="jCwd" list="jCwdList" autocomplete="off"><datalist id="jCwdList"></datalist></label>
+    </div>
+    <div class="dlg-row">
+      <label>skill (optional) <input id="jSkill" list="jSkillList" placeholder="type to search…" autocomplete="off"><datalist id="jSkillList"></datalist></label>
+      <label>repeat <select id="jRepeat"><option value="none">no, just once</option><option value="daily">every day</option><option value="weekdays">weekdays</option><option value="custom">pick days…</option></select></label>
+    </div>
+    <div class="dlg-row hidden" id="jWhen">
+      <label>at <input type="time" id="jTime" value="09:00"></label>
+      <div class="days hidden" id="jDays"></div>
+    </div>
+    <label class="check"><input type="checkbox" id="jQueue"> start on its own when this project's crabs are free</label>
+    <div class="dlg-actions">
+      <button class="btn danger-btn hidden" id="jDelete" value="delete">delete</button>
+      <span style="flex:1"></span>
+      <button class="btn" value="cancel" formnovalidate>cancel</button>
+      <button class="btn primary" value="save">save note</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="look-pop hidden" id="lookPop"><div class="look-title" id="lookPopTitle"></div><div class="look" data-look></div></div>
 <div id="toast" class="toast"></div>
 <script src="critter.js"></script>
 <script src="pen.js"></script>
 <script src="app.js"></script>
+<script src="board.js"></script>
+<script src="logbook-view.js"></script>
+<script src="settings.js"></script>
 </body>
 </html>
