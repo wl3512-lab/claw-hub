@@ -48,7 +48,7 @@
   const SLOTS = {
     desk: [[16, 40], [37, 40], [16, 66], [37, 66], [16, 92], [37, 92]],
     library: [[64, 38], [86, 38]],
-    bed: [[78, 70], [91, 76], [82, 90]],
+    bed: [[75, 68], [90, 70], [68, 84], [83, 86], [96, 90], [60, 97]],
     gate: [[50, 97], [36, 97], [64, 97]],
   };
   const PLAY = { x0: 40, x1: 72, y0: 52, y1: 86 };
@@ -84,7 +84,7 @@
     at('plant', 50, 30, 30);
     props.push('<div class="sand"></div>');
     // spare shells lying on the beach: bigger homes to move into
-    [[70, 84, 0], [95, 90, 2], [88, 64, 3]].forEach(([x, y, i]) => props.push(`<div class="pp spare" style="left:${x}%;top:${y}%;z-index:${y}">${emptyShell(SHELLS[i], 40 + i * 70, Math.max(2, S - 2))}</div>`));
+    [[93, 60, 0], [97, 78, 2], [76, 96, 3]].forEach(([x, y, i]) => props.push(`<div class="pp spare" style="left:${x}%;top:${y}%;z-index:${y}">${emptyShell(SHELLS[i], 40 + i * 70, Math.max(2, S - 2))}</div>`));
     for (const [x, y] of SLOTS.desk.slice(0, Math.max(2, deskCount))) at('desk', x, y + 3, Math.round(y) + 2);
     penEl.querySelector('.props').innerHTML = props.join('');
     penEl._desks = Math.max(2, deskCount);
@@ -251,7 +251,8 @@
         b.h = h; b.conv = conv; b.ring = ring;
         const lk = lookFor(conv);
         if (lk.hue !== b.hue || lk.shell !== b.shell) { b.hue = lk.hue; b.shell = lk.shell; b.key = ''; }
-        const bsay = h.status === 'stuck' ? `stuck on: ${short(h.description, 40)}. help?` : h.status === 'done' ? 'done! bringing it home' : `${h.tool ? (VERBS[h.tool] || h.tool.toLowerCase()) : 'working on'} · ${short(h.description, 36)}`;
+        const bsay = h.orphan ? `stopped: ${short(h.description, 36)}. my crab closed, wake it to retry`
+          : h.status === 'stuck' ? `stuck on: ${short(h.description, 40)}. help?` : h.status === 'done' ? 'done! bringing it home' : `${h.tool ? (VERBS[h.tool] || h.tool.toLowerCase()) : 'working on'} · ${short(h.description, 36)}`;
         const bs = b.el.querySelector('.say');
         if (bs.textContent !== bsay) bs.textContent = bsay;
         b.onArrive = () => {

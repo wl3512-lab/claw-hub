@@ -52,7 +52,7 @@ const liveOnes = () => ui.convos.filter((c) => c.live && !c.bot);
 const PARK_WHERE = { 'claude-vscode': 'vs code', 'claude-desktop': 'claude app', cli: 'terminal', hub: 'here', 'sdk-cli': 'here' };
 // parked chats get a stand-in live record so the pen can draw them napping
 const parkedOnes = () => ui.convos.filter((c) => c.parked && !c.live && !c.archived).map((c) => ({
-  ...c, live: { parked: true, where: PARK_WHERE[c.parked.where] || c.parked.where, status: 'parked', statusSince: c.parked.since, activity: c.parked.activity || {}, helpers: [] },
+  ...c, live: { parked: true, where: PARK_WHERE[c.parked.where] || c.parked.where, status: 'parked', statusSince: c.parked.since, activity: c.parked.activity || {}, helpers: c.parked.helpers || [] },
 }));
 
 const stillCache = new Map();

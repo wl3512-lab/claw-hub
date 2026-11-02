@@ -217,7 +217,8 @@ function liveInfo(live, meta) {
   const info = { pid: live.pid, status: live.status, statusSince: live.statusSince, entrypoint: live.entrypoint, tty: live.tty };
   if (meta) {
     info.activity = t.activity(meta);
-    info.helpers = t.helpers(meta);
+    // babies that went quiet before this process started died with an earlier one
+    info.helpers = t.helpers(meta).filter((h) => h.status === 'done' || !live.startedAt || h.lastAt >= live.startedAt - 5000);
   }
   if (live.entrypoint === 'hub') {
     info.inHub = true;
@@ -253,7 +254,11 @@ function convoSummary(m, state, liveBySession) {
     // VS Code and the Claude app stop an idle chat's process and restart it on your next message:
     // show recently active chats with no process as "parked"
     parked: !live && !(m.bot && !s.hub) && Date.now() - m.updatedAt < 3 * 3600 * 1000
-      ? { where: s.hub ? 'hub' : m.entrypoint || 'cli', since: m.updatedAt, activity: t.activity(m) } : null,
+      ? {
+        where: s.hub ? 'hub' : m.entrypoint || 'cli', since: m.updatedAt, activity: t.activity(m),
+        // its babies died with its process unless they had already finished
+        helpers: t.helpers(m).map((h) => (h.status === 'done' ? h : { ...h, status: 'stuck', orphan: true })),
+      } : null,
   };
 }
 
