@@ -37,6 +37,23 @@ function readState() {
   s.groups = s.groups || [];
   return s;
 }
+
+// Baby crabs hatched after this moment stay until you open them (see helpersOf).
+let babySince = readState().babySince;
+if (!babySince) { const s = readState(); babySince = s.babySince = Date.now(); writeState(s); }
+function helpersOf(meta, state) {
+  const seen = new Set((state.convos[meta.id] || {}).seenBabies || []);
+  return t.helpers(meta, { seen, since: babySince });
+}
+function markBabySeen(sid, agentId) {
+  const s = readState();
+  const cur = s.convos[sid] || {};
+  const list = cur.seenBabies || [];
+  if (list.includes(agentId)) return;
+  cur.seenBabies = list.concat(agentId).slice(-300);
+  s.convos[sid] = cur;
+  writeState(s);
+}
 function writeState(s) { writeJson(STATE_FILE, s, 2); }
 
 // ---------- helpers ----------
@@ -219,12 +236,14 @@ function allLive() {
   return mine.concat(t.listLive().filter((l) => !seen.has(l.sessionId)));
 }
 
-function liveInfo(live, meta) {
+function liveInfo(live, meta, state) {
   const info = { pid: live.pid, status: live.status, statusSince: live.statusSince, entrypoint: live.entrypoint, tty: live.tty };
   if (meta) {
     info.activity = t.activity(meta);
     // babies that went quiet before this process started died with an earlier one
-    info.helpers = t.helpers(meta).filter((h) => h.status === 'done' || !live.startedAt || h.lastAt >= live.startedAt - 5000);
+    // (unless they're new-rule babies, which wait to be opened)
+    info.helpers = helpersOf(meta, state || readState()).map((h) => (h.status === 'done' || !live.startedAt || h.lastAt >= live.startedAt - 5000
+      ? h : h.sticky ? { ...h, status: 'stuck', orphan: true } : null)).filter(Boolean);
   }
   if (live.entrypoint === 'hub') {
     info.inHub = true;
@@ -237,6 +256,10 @@ function liveInfo(live, meta) {
 function convoSummary(m, state, liveBySession) {
   const s = state.convos[m.id] || {};
   const live = liveBySession.get(m.id);
+  const isBot = m.bot && !s.hub;
+  // babies only exist for chats touched since the new rule started
+  const babies = !live && !isBot && m.updatedAt >= babySince ? helpersOf(m, state) : [];
+  const recent = Date.now() - m.updatedAt < 3 * 3600 * 1000;
   return {
     id: m.id,
     title: s.label || m.customTitle || m.aiTitle || (m.firstPrompt || '').slice(0, 80) || 'Untitled',
@@ -256,14 +279,16 @@ function convoSummary(m, state, liveBySession) {
     entrypoint: m.entrypoint,
     bot: m.bot && !s.hub,
     size: m.size,
-    live: live ? liveInfo(live, m) : null,
+    live: live ? liveInfo(live, m, state) : null,
     // VS Code and the Claude app stop an idle chat's process and restart it on your next message:
-    // show recently active chats with no process as "parked"
-    parked: !live && !(m.bot && !s.hub) && Date.now() - m.updatedAt < 3 * 3600 * 1000
+    // show recently active chats with no process as "parked". A chat with babies you
+    // haven't opened yet stays parked too, so its babies stay on the beach.
+    parked: !live && !isBot && (recent || babies.some((h) => h.sticky))
       ? {
         where: s.hub ? 'hub' : m.entrypoint || 'cli', since: m.updatedAt, activity: t.activity(m),
         // its babies died with its process unless they had already finished
-        helpers: t.helpers(m).map((h) => (h.status === 'done' ? h : { ...h, status: 'stuck', orphan: true })),
+        helpers: (recent ? babies.length ? babies : helpersOf(m, state) : babies.filter((h) => h.sticky))
+          .map((h) => (h.status === 'done' ? h : { ...h, status: 'stuck', orphan: true })),
       } : null,
   };
 }
@@ -301,6 +326,10 @@ async function handleApi(req, res, url) {
     const sub = meta && t.subMeta(meta, subMatch[2]);
     if (!sub) return send(res, 404, { error: 'not found' });
     const items = t.loadConvo(sub);
+    // you opened a finished baby and saw its work: now it can go home
+    const h = t.helpers(meta, { since: 0 }).find((x) => x.id === subMatch[2]);
+    const finished = sub.finished || (h ? h.status === 'done' : items.length && items[items.length - 1].kind === 'assistant');
+    if (finished) markBabySeen(meta.id, subMatch[2]);
     const limit = Math.min(Number(url.searchParams.get('limit')) || 250, 2000);
     const start = Math.max(0, items.length - limit);
     return send(res, 200, { total: items.length, start, description: sub.description, finished: sub.finished, items: items.slice(start).map(({ msgId, id, ...rest }) => rest) });
@@ -490,6 +519,37 @@ async function handleApi(req, res, url) {
         if (state.convos[resumeId]) { state.convos[id] = { ...state.convos[resumeId], ...state.convos[id] }; writeState(state); }
       }
       return send(res, 200, { ok: true, id });
+    } catch (e) {
+      return send(res, 500, { error: e.message });
+    }
+  }
+
+  // Side chat: a copy of a chat (same history, same folder, same files) that works on
+  // something else at the same time. The original keeps going untouched.
+  if (req.method === 'POST' && url.pathname === '/api/chat/side') {
+    const b = await readBody(req);
+    if (!UUID.test(b.id || '')) return send(res, 400, { error: 'bad id' });
+    const task = String(b.prompt || '').trim();
+    if (!task) return send(res, 400, { error: 'say what the side chat should do' });
+    const meta = t.findTranscript(b.id);
+    if (!meta || meta.empty) return send(res, 404, { error: 'nothing to copy yet. type something in this chat first.' });
+    if (!isDir(meta.cwd)) return send(res, 400, { error: `Folder not found: ${meta.cwd}` });
+    const st0 = readState();
+    const parent = st0.convos[b.id] || {};
+    const parentTitle = parent.label || meta.customTitle || meta.aiTitle || (meta.firstPrompt || '').slice(0, 50) || 'a chat';
+    const prompt = `(side chat: you're a copy of this conversation running alongside the original, which keeps working. `
+      + `Same folder and files. Do only the task below. Don't touch files the original is in the middle of editing unless the task needs it.)\n\n${task}`;
+    try {
+      const id = await hub.start({ cwd: meta.cwd, prompt, resumeId: b.id, fork: true, images: cleanImages(b.images) });
+      if (id === b.id) throw new Error('Claude reused the same session instead of copying it.');
+      const st = readState();
+      st.convos[id] = {
+        ...(st.convos[id] || {}), hub: true, sideOf: b.id,
+        label: `↳ ${task.replace(/\s+/g, ' ').slice(0, 40)}`,
+        group: parent.group, hue: parent.hue, shell: parent.shell,
+      };
+      writeState(st);
+      return send(res, 200, { ok: true, id, parentTitle });
     } catch (e) {
       return send(res, 500, { error: e.message });
     }

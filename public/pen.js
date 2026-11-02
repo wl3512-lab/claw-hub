@@ -192,20 +192,19 @@
 
   function babyPose(h) {
     if (h.status === 'stuck') return 'tired';
-    if (h.status === 'done') return 'walk';
+    if (h.status === 'done') return 'ask'; // waving its scroll until you open it
     if (h.tool && READ_TOOLS.test(h.tool)) return 'read';
     if (h.tool) return 'type';
     return 'think';
   }
   // babies near their mother sit on a half ring below her, each in its own spot
   function babyTarget(h, mom, i = 0, n = 1) {
-    if (h.status === 'done') return [mom.x, mom.y];
     if (h.status !== 'stuck' && h.tool && READ_TOOLS.test(h.tool)) return [rand(58, 94), rand(42, 54)];
     const ang = Math.PI * (n === 1 ? 0.5 : 0.08 + 0.84 * (i / (n - 1)));
     return [clamp(mom.x - Math.cos(ang) * 15 + rand(-1, 1), 5, 95), clamp(mom.y + Math.sin(ang) * 13 + 3, 14, 97)];
   }
   function ringIndex(conv, h) {
-    const near = (conv.live.helpers || []).filter((x) => x.status !== 'done' && (x.status === 'stuck' || !(x.tool && READ_TOOLS.test(x.tool))));
+    const near = (conv.live.helpers || []).filter((x) => x.status === 'done' || x.status === 'stuck' || !(x.tool && READ_TOOLS.test(x.tool)));
     return [Math.max(0, near.findIndex((x) => x.id === h.id)), Math.max(1, near.length)];
   }
   function babyDraw(b) {
@@ -252,20 +251,25 @@
         const lk = lookFor(conv);
         if (lk.hue !== b.hue || lk.shell !== b.shell) { b.hue = lk.hue; b.shell = lk.shell; b.key = ''; }
         const bsay = h.orphan ? `stopped: ${short(h.description, 36)}. my crab closed, wake it to retry`
-          : h.status === 'stuck' ? `stuck on: ${short(h.description, 40)}. help?` : h.status === 'done' ? 'done! bringing it home' : `${h.tool ? (VERBS[h.tool] || h.tool.toLowerCase()) : 'working on'} · ${short(h.description, 36)}`;
+          : h.status === 'stuck' ? `stuck on: ${short(h.description, 40)}. help?` : h.status === 'done' ? 'done! tap me to see what I found' : `${h.tool ? (VERBS[h.tool] || h.tool.toLowerCase()) : 'working on'} · ${short(h.description, 36)}`;
         const bs = b.el.querySelector('.say');
         if (bs.textContent !== bsay) bs.textContent = bsay;
-        b.onArrive = () => {
-          if (b.h.status === 'done') {
-            b.el.classList.add('home');
-            setTimeout(() => { b.el.remove(); babies.delete(key); wentHome.add(key); }, 700);
-          } else babyDraw(b);
-        };
+        b.onArrive = () => babyDraw(b);
         if ((h.status !== was || ringChanged) && !b.hatching) { const [x, y] = babyTarget(h, mom, ...ring); walkTo(b, x, y); }
         babyDraw(b);
       }
     }
-    for (const [key, b] of babies) if (!seen.has(key) && !b.el.classList.contains('home')) { b.el.remove(); babies.delete(key); }
+    for (const [key, b] of babies) {
+      if (seen.has(key) || b.leaving) continue;
+      const mom = crabs.get(b.conv.id);
+      if (b.h.status === 'done' && mom) {
+        // you opened it: walk the finished work home to its mom, then go
+        b.leaving = true;
+        b.say = b.el.querySelector('.say'); b.say.textContent = 'bringing it home';
+        b.onArrive = () => { b.el.classList.add('home'); setTimeout(() => { b.el.remove(); babies.delete(key); wentHome.add(key); }, 700); };
+        walkTo(b, mom.x, mom.y);
+      } else { b.el.remove(); babies.delete(key); }
+    }
   }
 
   function rand(a, b) { return a + Math.random() * (b - a); }

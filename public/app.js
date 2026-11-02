@@ -241,6 +241,7 @@ function renderHead(c) {
   menu.querySelector('[data-act=copy]').classList.toggle('hidden', !!c.empty);
   menu.querySelector('[data-act=close]').classList.toggle('hidden', !c.live);
   menu.querySelector('[data-act=enhance]').classList.toggle('hidden', !!c.empty);
+  menu.querySelector('[data-act=side]').classList.toggle('hidden', !!c.empty);
   const gsel = $('#aGroup');
   const opts = `<option value="">none</option>` + ui.groups.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('') + `<option value="__new">+ new…</option>`;
   if (gsel._opts !== opts) { gsel._opts = opts; gsel.innerHTML = opts; }
@@ -310,7 +311,7 @@ function openSub(key) {
   const mom = ui.convos.find((x) => x.id === sid);
   ui.sel = sid; ui.sub = aid; ui.limit = 250;
   show('chat');
-  const h = ((mom && mom.live && mom.live.helpers) || []).find((x) => x.id === aid) || {};
+  const h = ((mom && ((mom.live && mom.live.helpers) || (mom.parked && mom.parked.helpers))) || []).find((x) => x.id === aid) || {};
   setHtml($('#chatCritter'), crab(mom || { id: sid }, h.status === 'stuck' ? 'tired' : 'read', 30));
   $('#cTitle').textContent = h.description || 'baby crab';
   $('#cTitle').contentEditable = 'false';
@@ -546,6 +547,7 @@ document.addEventListener('click', async (e) => {
     const a = act.dataset.act;
     if (a !== 'enhance') menu.classList.add('hidden');
     if (a === 'enhance') openEnhance();
+    if (a === 'side') startSide(c);
     if (a === 'pin') setState({ pinned: !c.pinned });
     if (a === 'file') { setState({ archived: !c.archived }); toast(c.archived ? 'filed away' : 'back in your chats'); }
     if (a === 'close') closeSession(c.id);
@@ -561,6 +563,19 @@ document.addEventListener('click', async (e) => {
   }
   if (!e.target.closest('.more')) menu.classList.add('hidden');
 });
+
+// side chat: copy this chat's whole context into a second crab that does another task
+async function startSide(c) {
+  const task = prompt(`side chat off "${c.title}"\nsame history, same folder and files. the original keeps going.\n\nwhat should the side chat do?`);
+  if (!task || !task.trim()) return;
+  toast('copying the chat into a side crab…');
+  try {
+    const r = await api('/api/chat/side', { id: c.id, prompt: task.trim() });
+    await refresh();
+    openConvo(r.id);
+    toast('side chat started');
+  } catch (err) { toast(err.message); }
+}
 
 $('#aMain').onclick = async () => {
   const c = cur(); if (!c || !c.live) return;
