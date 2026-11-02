@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claw Hub</title>
+<link rel="icon" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:opsz,wght@9..40,400;9..40,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+</head>
+<body>
+<header class="top">
+  <button class="mark" data-go="room">claw hub<span class="caret">_</span></button>
+  <nav class="tabs">
+    <button data-go="room" class="on">room <span id="tabRoomCount" class="n"></span></button>
+    <button data-go="chats">chats</button>
+  </nav>
+  <button class="btn primary" id="newBtn" title="Start a new chat (N)">+ new</button>
+</header>
+
+<!-- ROOM -->
+<main class="view" id="vRoom">
+  <p class="summary" id="roomSummary"></p>
+  <div class="room-grid">
+    <div class="pen" id="pen"></div>
+    <aside class="tips">
+      <h2>notes from the pen</h2>
+      <div id="tips"></div>
+    </aside>
+  </div>
+  <button class="naps-link hidden" id="napsLink"></button>
+</main>
+
+<!-- CHATS -->
+<main class="view hidden" id="vChats">
+  <div class="chats-bar">
+    <input id="q" type="search" placeholder="search chats  /" autocomplete="off">
+    <select id="filter" title="Show"></select>
+  </div>
+  <div class="list" id="list"></div>
+</main>
+
+<!-- ONE CHAT -->
+<main class="view hidden" id="vChat">
+  <header class="chat-head">
+    <button class="back" id="back" title="Back (Esc)">←</button>
+    <div class="chat-id" id="chatCritter"></div>
+    <div class="chat-titles">
+      <h1 id="cTitle" contenteditable="true" spellcheck="false" title="Click to rename"></h1>
+      <div class="chat-sub" id="cSub"></div>
+    </div>
+    <button class="btn primary" id="aMain"></button>
+    <div class="more">
+      <button class="btn icon" id="moreBtn" title="More">⋯</button>
+      <div class="menu hidden" id="moreMenu">
+        <button data-act="enhance">enhance with a skill…</button>
+        <button data-act="pin">pin</button>
+        <button data-act="note">add a note</button>
+        <label class="menu-sel">project <select id="aGroup"></select></label>
+        <button data-act="terminal">open in terminal</button>
+        <button data-act="copy">copy resume command</button>
+        <button data-act="file">file away</button>
+        <button data-act="close" class="danger">close session</button>
+      </div>
+    </div>
+  </header>
+  <div class="note hidden" id="cNote" contenteditable="true" spellcheck="false"></div>
+  <div class="msgs" id="msgs"></div>
+  <footer class="composer" id="composer">
+    <div class="status-line hidden" id="working"></div>
+    <form id="sendForm" class="send" data-drop="send">
+      <div class="att" data-att="send"><div class="thumbs"></div><button type="button" class="btn att-btn" title="add images (or paste / drop them)">+ img</button><input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden></div>
+      <textarea id="sendText" rows="1" placeholder="message claude…"></textarea>
+      <button class="btn primary" id="sendBtn">send</button>
+    </form>
+  </footer>
+</main>
+
+<dialog id="newDlg">
+  <form method="dialog" id="newForm">
+    <h2>new chat</h2>
+    <textarea id="newPrompt" rows="4" placeholder="what do you want to work on?" data-drop="new"></textarea>
+    <div class="att" data-att="new"><div class="thumbs"></div><button type="button" class="btn att-btn" title="add images (or paste / drop them)">+ img</button><input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden></div>
+    <div class="dlg-row">
+      <label>skill (optional) <input id="newSkill" list="newSkillList" placeholder="type to search…" autocomplete="off"><datalist id="newSkillList"></datalist></label>
+      <label>bring in a chat (optional) <select id="newImport"></select></label>
+    </div>
+    <label class="dlg-lbl hidden" id="newBriefWrap">its progress, as a short brief (edit if you want)
+      <textarea id="newBrief" rows="6"></textarea>
+    </label>
+    <div class="dlg-row">
+      <label>folder <input id="newCwd" list="cwdList" autocomplete="off"><datalist id="cwdList"></datalist></label>
+      <label>project <select id="newGroup"></select></label>
+    </div>
+    <label class="check"><input type="checkbox" id="newInTerminal"> open in a terminal window instead</label>
+    <div class="dlg-actions">
+      <button class="btn" value="cancel" formnovalidate>cancel</button>
+      <button class="btn primary" id="newGo" value="go">start ⌘↵</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="enhDlg" class="wide">
+  <form method="dialog" id="enhForm">
+    <h2>enhance with a skill</h2>
+    <p class="dlg-hint">pick a skill. this chat's progress goes in as a short brief, and a new chat starts from there.</p>
+    <input id="skillQ" type="search" placeholder="search your skills…" autocomplete="off">
+    <div class="skill-list" id="skillList"></div>
+    <label class="dlg-lbl">brief (edit if you want)
+      <textarea id="enhBrief" rows="8"></textarea>
+    </label>
+    <label class="dlg-lbl">what should it do next? (optional)
+      <input id="enhNext" placeholder="e.g. tighten the hero copy, then ship">
+    </label>
+    <div class="att" data-att="enh"><div class="thumbs"></div><button type="button" class="btn att-btn" title="add images (or paste / drop them)">+ img</button><input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden></div>
+    <label class="check"><input type="checkbox" id="enhTerminal"> open in a terminal window instead</label>
+    <div class="dlg-actions">
+      <span class="tok" id="enhTok"></span>
+      <button class="btn" value="cancel" formnovalidate>cancel</button>
+      <button class="btn primary" id="enhGo" value="go">start</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast"></div>
+<script src="critter.js"></script>
+<script src="pen.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
