@@ -276,5 +276,33 @@
   }
   function crab(conv, mood, size, still) { const l = lookFor(conv); return pixelCritter(mood, l.hue, size, still, l.shell); }
 
-  window.Critter = { lookFor, crab, pixelCritter, hueFor, prop, emptyShell, SHELLS, frames, palette, rects, SPRITE_W: W, SPRITE_H: H };
+  // ---------- hermit crab seen from above (for the map), facing up ----------
+  const topCache = new Map();
+  function topGrid(shellType) {
+    if (topCache.has(shellType)) return topCache.get(shellType);
+    const g = blank(14, 14);
+    // legs: three a side, poking out under the shell
+    for (const y of [7, 9, 11]) { line(g, 3, y, 1, y + 1, 'd'); line(g, 10, y, 12, y + 1, 'd'); }
+    // body + claws in front (top), big claw on the right
+    ellipse(g, 7, 5, 3.2, 2.4, 'b');
+    line(g, 5, 4, 3, 2, 'd'); line(g, 9, 4, 11, 2, 'd');
+    rect(g, 2, 1, 2, 2, 'c'); rect(g, 10, 0, 3, 3, 'c');
+    set(g, 6, 2, 'k'); set(g, 8, 2, 'k'); // eyes
+    // shell on its back, seen from the top
+    ellipse(g, 7, 9, 4.2, 4.2, 'S');
+    if (shellType === 'moon') { for (let y = 6; y < 13; y += 2) for (let x = 4; x < 11; x++) if (g[y][x] === 'S' && (x + y) % 3) set(g, x, y, 'T'); }
+    else if (shellType === 'tower') { ellipse(g, 7, 9, 2.6, 2.6, 'T'); ellipse(g, 7, 9, 1.4, 1.4, 'S'); set(g, 7, 9, 'T'); }
+    else if (shellType === 'conch') { for (let y = 6; y <= 12; y += 2) line(g, 4, y, 10, y - 1, 'T'); }
+    else { let px = null, py = null; for (let t = 0; t < Math.PI * 4; t += 0.15) { const rr = 3.4 * (1 - t / (Math.PI * 4.4)); const x = Math.round(7 + rr * Math.cos(t)), y = Math.round(9 + rr * Math.sin(t)); if (x !== px || y !== py) set(g, x, y, 'T'); px = x; py = y; } }
+    set(g, 5, 7, 'U'); set(g, 6, 7, 'U');
+    const out = outline(g);
+    topCache.set(shellType, out);
+    return out;
+  }
+  function topCritter(hue, size = 36, shellType) {
+    const g = topGrid(shellType || SHELLS[hue % SHELLS.length]);
+    return `<svg class="px topview" viewBox="0 0 14 14" width="${size}" height="${size}" shape-rendering="crispEdges">${rects(g, palette(hue))}</svg>`;
+  }
+
+  window.Critter = { lookFor, crab, pixelCritter, topCritter, hueFor, prop, emptyShell, SHELLS, frames, palette, rects, SPRITE_W: W, SPRITE_H: H };
 })();

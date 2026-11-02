@@ -1,6 +1,6 @@
 // The playpen: every live session is a critter that goes to the spot that matches what it's doing.
 (function () {
-  const { pixelCritter, hueFor, prop, emptyShell, SHELLS, lookFor, crab } = window.Critter;
+  const { pixelCritter, hueFor, prop, emptyShell, SHELLS, lookFor, crab, topCritter } = window.Critter;
 
   const READ_TOOLS = /^(Read|Grep|Glob|LS|WebFetch|WebSearch|NotebookRead)$/;
   const ASLEEP_AFTER = 20 * 60 * 1000;
@@ -44,16 +44,34 @@
     return { ...s, pose: 'idle', zone: 'play', label: 'your turn' };
   }
 
-  // slot layout in % of the pen (x = center, y = feet)
-  const SLOTS = {
-    desk: [[16, 40], [37, 40], [16, 66], [37, 66], [16, 92], [37, 92]],
-    library: [[64, 38], [86, 38]],
-    bed: [[75, 68], [90, 70], [68, 84], [83, 86], [96, 90], [60, 97]],
-    gate: [[50, 97], [36, 97], [64, 97]],
-  };
-  const PLAY = { x0: 40, x1: 72, y0: 52, y1: 86 };
+  // ---------- places ----------
+  // The pen has an overview map (seen from the top) and one room page per place.
+  const ROOMS = [
+    { id: 'desk', name: 'office', blurb: 'working', box: [3, 5, 47, 47] },
+    { id: 'library', name: 'library', blurb: 'reading', box: [53, 5, 97, 47] },
+    { id: 'gate', name: 'front door', blurb: 'asking you', box: [3, 53, 29, 95] },
+    { id: 'play', name: 'lounge', blurb: 'your turn', box: [33, 53, 67, 95] },
+    { id: 'bed', name: 'shell beach', blurb: 'asleep · parked', box: [71, 53, 97, 95] },
+  ];
+  const roomById = (id) => ROOMS.find((r) => r.id === id);
+  let PLAY = { x0: 12, x1: 88, y0: 40, y1: 90 };
 
-  const crabs = new Map(); // id -> { el, x, y, zone, pose, facing, movingUntil }
+  let room = null; // null = the map
+  try { const r = localStorage.getItem('clawhub.room'); if (roomById(r)) room = r; } catch { /* private mode */ }
+  let last = null; // last render args, to redraw right away when you switch rooms
+
+  // where crabs stand on a room page (x = center, y = feet, in % of the pen)
+  function slotsFor(id, n) {
+    const out = [];
+    const grid = (cols, x0, dx, y0, dy) => { for (let i = 0; i < n; i++) out.push([x0 + (i % cols) * dx, y0 + Math.floor(i / cols) * dy]); };
+    if (id === 'desk') { const cols = n <= 4 ? 2 : n <= 9 ? 3 : 4; grid(cols, 50 - (cols - 1) * 12 + 4, 24, 36, n > cols * 2 ? 22 : 28); }
+    else if (id === 'library') grid(4, 15, 23, 50, 22);
+    else if (id === 'gate') { for (let i = 0; i < n; i++) { const k = Math.ceil(i / 2) * (i % 2 ? -1 : 1); out.push([50 + k * 13, 92 - Math.floor(i / 7) * 20]); } }
+    else if (id === 'bed') grid(5, 14, 18, 46, 22);
+    return out.map(([x, y]) => [Math.max(6, Math.min(94, x)), Math.max(24, Math.min(97, y))]);
+  }
+
+  const crabs = new Map(); // id -> { el, x, y, zone, pose, facing, movingUntil } (only crabs in the open room)
   let penEl = null;
 
   function scale() { return Math.max(3, Math.min(6, Math.round(penEl.clientWidth / 175))); }
@@ -61,33 +79,66 @@
   function buildPen(el) {
     penEl = el;
     el.innerHTML = `
-      <div class="pen-floor"></div>
-      <div class="pen-label" style="left:6%;top:4%">work</div>
-      <div class="pen-label" style="left:62%;top:4%">library</div>
-      <div class="pen-label" style="left:84%;top:96%">shell beach</div>
-      <div class="pen-gate"><span>you</span></div>
-      <div class="props"></div>
-      <div class="crabs"></div>`;
-    placeProps();
-    window.addEventListener('resize', () => { placeProps(); for (const c of crabs.values()) place(c); });
+      <div class="pen-map"></div>
+      <div class="pen-scene">
+        <div class="pen-floor"></div>
+        <div class="room-bar"><button class="btn room-back" data-room-back>← all rooms</button><span class="room-name"></span></div>
+        <div class="pen-gate"><span>you</span></div>
+        <div class="props"></div>
+        <div class="crabs"></div>
+      </div>`;
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('[data-room-back]')) { setRoom(null); return; }
+      const mc = e.target.closest('.mapcrab');
+      if (mc) { if (window.openConvo) window.openConvo(mc.dataset.id); return; }
+      const tile = e.target.closest('.mroom');
+      if (tile) setRoom(tile.dataset.room);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && room && !el.closest('.hidden') && !e.target.closest('input, textarea, [contenteditable="true"]')) setRoom(null);
+    });
+    window.addEventListener('resize', () => { penEl._propsKey = ''; if (last) render(...last); for (const c of crabs.values()) place(c); });
   }
 
-  function placeProps(deskCount = 3) {
+  function setRoom(id) {
+    room = id;
+    try { if (id) localStorage.setItem('clawhub.room', id); else localStorage.removeItem('clawhub.room'); } catch { /* fine */ }
+    // leaving or switching: crabs on screen go away, the new room's crabs walk in from the door
+    for (const c of crabs.values()) c.el.remove();
+    crabs.clear();
+    for (const b of babies.values()) b.el.remove();
+    babies.clear();
+    penEl._propsKey = '';
+    if (last) render(...last);
+  }
+
+  function placeProps(id, n) {
     const S = scale();
     penEl.style.setProperty('--s', S + 'px');
+    const key = `${id}|${n}|${S}`;
+    if (penEl._propsKey === key) return;
+    penEl._propsKey = key;
     const props = [];
     const at = (name, x, y, z, extra = '') => props.push(`<div class="pp ${extra}" style="left:${x}%;top:${y}%;z-index:${z}">${prop(name, S)}</div>`);
-    at('shelf', 76, 22, 22);
-    props.push('<div class="rug"></div>');
-    at('ball', 66, 58, 58);
-    at('plant', 4, 30, 30);
-    at('plant', 50, 30, 30);
-    props.push('<div class="sand"></div>');
-    // spare shells lying on the beach: bigger homes to move into
-    [[93, 60, 0], [97, 78, 2], [76, 96, 3]].forEach(([x, y, i]) => props.push(`<div class="pp spare" style="left:${x}%;top:${y}%;z-index:${y}">${emptyShell(SHELLS[i], 40 + i * 70, Math.max(2, S - 2))}</div>`));
-    for (const [x, y] of SLOTS.desk.slice(0, Math.max(2, deskCount))) at('desk', x, y + 3, Math.round(y) + 2);
+    penEl.querySelector('.pen-scene').dataset.room = id;
+    penEl.querySelector('.pen-gate').classList.toggle('hidden', id !== 'gate');
+    if (id === 'desk') {
+      for (const [x, y] of slotsFor('desk', Math.max(2, n))) at('desk', x, y + 3, Math.round(y) + 2);
+      at('plant', 4, 30, 30); at('plant', 96, 30, 30);
+    } else if (id === 'library') {
+      [15, 38, 61, 84].forEach((x) => at('shelf', x, 30, 22));
+      at('plant', 4, 40, 40);
+    } else if (id === 'play') {
+      props.push('<div class="rug"></div>');
+      at('ball', 70, 62, 62); at('plant', 6, 34, 34); at('plant', 94, 34, 34);
+      PLAY = { x0: 14, x1: 86, y0: 52, y1: 92 };
+    } else if (id === 'bed') {
+      props.push('<div class="sand"></div>');
+      [[90, 34, 0], [8, 92, 2], [94, 90, 3], [52, 30, 1]].forEach(([x, y, i]) => props.push(`<div class="pp spare" style="left:${x}%;top:${y}%;z-index:${y}">${emptyShell(SHELLS[i], 40 + i * 70, Math.max(2, S - 2))}</div>`));
+    } else if (id === 'gate') {
+      at('plant', 30, 90, 90); at('plant', 70, 90, 90);
+    }
     penEl.querySelector('.props').innerHTML = props.join('');
-    penEl._desks = Math.max(2, deskCount);
   }
 
   function place(c) {
@@ -120,29 +171,59 @@
     return crab(conv, pose, 96);
   }
 
-  function render(convos, now) {
+  const escHtml = (t) => String(t).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+  // ---------- the map (top view) ----------
+  const MAX_ICONS = 12;
+  function renderMap(zones) {
     const S = scale();
+    penEl.style.setProperty('--s', S + 'px');
+    const html = ROOMS.map((r) => {
+      const list = zones[r.id];
+      const [x0, y0, x1, y1] = r.box;
+      const icons = list.slice(0, MAX_ICONS).map((conv) => {
+        const l = lookFor(conv);
+        const busy = conv.live.status === 'busy' && !conv.live.parked;
+        return `<button class="mapcrab${busy ? ' busy' : ''}" data-id="${conv.id}" title="${escHtml(conv.title)}">${topCritter(l.hue, S * 9, l.shell)}</button>`;
+      }).join('') + (list.length > MAX_ICONS ? `<span class="more-crabs">+${list.length - MAX_ICONS}</span>` : '');
+      const names = list.slice(0, 3).map((c) => escHtml(c.title.length > 20 ? c.title.slice(0, 19) + '…' : c.title)).join(' · ')
+        + (list.length > 3 ? ` · +${list.length - 3}` : '');
+      return `<div class="mroom r-${r.id}${list.length ? '' : ' empty'}" data-room="${r.id}" role="button" tabindex="0" aria-label="${r.name}: ${list.length} crabs"
+          style="left:${x0}%;top:${y0}%;width:${x1 - x0}%;height:${y1 - y0}%">
+        <div class="furn"></div>
+        <div class="mhead"><b>${r.name}</b><span class="mcount">${list.length}</span><i>${r.blurb}</i></div>
+        <div class="mcrabs">${icons}</div>
+        <div class="mnames">${list.length ? names : 'empty'}</div>
+      </div>`;
+    }).join('');
+    const map = penEl.querySelector('.pen-map');
+    if (map._html !== html) { map._html = html; map.innerHTML = html; }
+  }
+
+  function render(convos, now) {
+    last = [convos, now];
     const live = convos;
-    // assign slots per zone
     const zones = { desk: [], library: [], bed: [], gate: [], play: [] };
     const states = new Map();
     for (const conv of live) { const st = stateOf(conv, now); states.set(conv.id, st); zones[st.zone].push(conv); }
-    // overflow → play
-    for (const z of ['desk', 'library', 'bed', 'gate']) {
-      while (zones[z].length > SLOTS[z].length) zones.play.push(zones[z].pop());
-    }
-    if (penEl._desks !== Math.max(2, zones.desk.length) || penEl.style.getPropertyValue('--s') !== S + 'px') placeProps(zones.desk.length);
+    renderMap(zones);
+    penEl.classList.toggle('in-room', !!room);
+    if (!room) { for (const c of crabs.values()) c.el.remove(); crabs.clear(); for (const b of babies.values()) b.el.remove(); babies.clear(); return; }
 
+    const here = zones[room];
+    const r = roomById(room);
+    const nameEl = penEl.querySelector('.room-name');
+    const label = `${r.name} · ${here.length} ${here.length === 1 ? 'crab' : 'crabs'} ${r.blurb}`;
+    if (nameEl.textContent !== label) nameEl.textContent = here.length ? label : `${r.name} · empty right now`;
+    placeProps(room, here.length);
+
+    const slots = slotsFor(room, here.length);
     const seen = new Set();
     const container = penEl.querySelector('.crabs');
-    const targets = new Map();
-    for (const z of ['desk', 'library', 'bed', 'gate']) zones[z].forEach((conv, i) => targets.set(conv.id, { zone: z, x: SLOTS[z][i][0], y: SLOTS[z][i][1] }));
-    for (const conv of zones.play) targets.set(conv.id, { zone: 'play' });
-
-    for (const conv of live) {
+    here.forEach((conv, i) => {
       seen.add(conv.id);
       const st = states.get(conv.id);
-      const tgt = targets.get(conv.id);
+      const spot = room === 'play' ? null : slots[i];
       let c = crabs.get(conv.id);
       if (!c) {
         const el = document.createElement('button');
@@ -150,21 +231,21 @@
         el.dataset.id = conv.id;
         el.innerHTML = '<span class="say"></span><span class="fxs"></span><span class="spr"></span><span class="tag"></span>';
         container.appendChild(el);
-        c = { el, x: 61, y: 98, zone: null, pose: null, facing: 1, movingUntil: 0, key: '' };
+        c = { el, x: 50, y: 99, zone: null, pose: null, facing: 1, movingUntil: 0, key: '' };
         crabs.set(conv.id, c);
         place(c);
-        el.getBoundingClientRect(); // so the first move animates (walks in from the gate)
+        el.getBoundingClientRect(); // so the first move animates (walks in through the door)
       }
       c.conv = conv; c.st = st;
       const say = sayFor(conv, st);
       const sayEl = c.el.querySelector('.say');
       if (sayEl.textContent !== say) sayEl.textContent = say;
-      if (tgt.zone !== c.zone) {
-        c.zone = tgt.zone;
-        const [nx, ny] = tgt.zone === 'play' ? freeSpot(c) : [tgt.x, tgt.y];
+      if (c.zone !== room) {
+        c.zone = room;
+        const [nx, ny] = spot || freeSpot(c);
         walkTo(c, nx, ny);
-      } else if (tgt.zone !== 'play' && (c.x !== tgt.x || c.y !== tgt.y)) {
-        walkTo(c, tgt.x, tgt.y);
+      } else if (spot && !c.leaving && (c.x !== spot[0] || c.y !== spot[1])) {
+        walkTo(c, spot[0], spot[1]);
       }
       const moving = Date.now() < c.movingUntil;
       const pose = moving ? 'walk' : st.pose;
@@ -180,9 +261,15 @@
         c.el.removeAttribute('title');
         c.el.setAttribute('aria-label', `${conv.title}: ${say}`);
       }
+    });
+    // crabs that moved to another place walk out the door
+    for (const [id, c] of crabs) {
+      if (seen.has(id) || c.leaving) continue;
+      c.leaving = true;
+      c.onArrive = () => { c.el.remove(); crabs.delete(id); };
+      walkTo(c, 50, 104);
     }
-    for (const [id, c] of crabs) if (!seen.has(id)) { c.el.remove(); crabs.delete(id); }
-    renderBabies(live);
+    renderBabies(live.filter((conv) => seen.has(conv.id)));
   }
 
   // ---------- baby crabs (subagents) ----------
@@ -199,7 +286,7 @@
   }
   // babies near their mother sit on a half ring below her, each in its own spot
   function babyTarget(h, mom, i = 0, n = 1) {
-    if (h.status !== 'stuck' && h.tool && READ_TOOLS.test(h.tool)) return [rand(58, 94), rand(42, 54)];
+    if (room === 'library' && h.status !== 'stuck' && h.tool && READ_TOOLS.test(h.tool)) return [rand(10, 90), rand(40, 54)];
     const ang = Math.PI * (n === 1 ? 0.5 : 0.08 + 0.84 * (i / (n - 1)));
     return [clamp(mom.x - Math.cos(ang) * 15 + rand(-1, 1), 5, 95), clamp(mom.y + Math.sin(ang) * 13 + 3, 14, 97)];
   }
@@ -301,6 +388,7 @@
   }
 
   function refreshOne(c) {
+    if (c.leaving || !c.st) return;
     const st = c.st; const conv = c.conv;
     const pose = st.pose;
     if (c.zone !== 'play') c.facing = 1; // face the laptop / shelf / you

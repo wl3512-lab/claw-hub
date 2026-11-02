@@ -354,3 +354,57 @@ dialog textarea { resize: vertical; }
   .chat-head { padding: 12px 16px; }
   .floor { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---------- pen: overview map (top view) + room pages ---------- */
+.pen-map, .pen-scene { position: absolute; inset: 0; }
+.pen.in-room .pen-map, .pen:not(.in-room) .pen-scene { display: none; }
+.pen-map { background: #120d1c; }
+.mroom { position: absolute; cursor: pointer; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  border: calc(var(--s,4px) * 1.5) solid #4e3329; box-shadow: inset 0 0 0 var(--s,4px) rgba(0,0,0,.35); transition: transform .12s, border-color .12s; }
+.mroom:hover, .mroom:focus-visible { border-color: var(--pink); transform: translateY(-2px); outline: none; }
+.mroom.empty .mcrabs, .mroom.empty .furn { opacity: .55; }
+.mroom.r-desk { background: repeating-linear-gradient(0deg, #2f2226 0 calc(var(--s,4px) * 4), #281d22 calc(var(--s,4px) * 4) calc(var(--s,4px) * 4 + 2px)); }
+.mroom.r-library { background-color: #231a38; background-image: radial-gradient(#2d2248 1px, transparent 1.5px); background-size: calc(var(--s,4px) * 3) calc(var(--s,4px) * 3); }
+.mroom.r-gate { background-color: #1c1729; background-image: linear-gradient(45deg, #221c32 25%, transparent 25%, transparent 75%, #221c32 75%), linear-gradient(45deg, #221c32 25%, transparent 25%, transparent 75%, #221c32 75%);
+  background-size: calc(var(--s,4px) * 6) calc(var(--s,4px) * 6); background-position: 0 0, calc(var(--s,4px) * 3) calc(var(--s,4px) * 3); }
+.mroom.r-play { background: #1a1428; }
+.mroom.r-bed { background: linear-gradient(180deg, #3a3044 0 72%, #24435e 72% 76%, #1d3550 76%); }
+.furn { position: absolute; inset: 0; pointer-events: none; }
+.r-desk .furn { background:
+  linear-gradient(#6b4a3a, #6b4a3a) 18% 30% / 22% 14% no-repeat, linear-gradient(#6b4a3a, #6b4a3a) 82% 30% / 22% 14% no-repeat,
+  linear-gradient(#6b4a3a, #6b4a3a) 18% 78% / 22% 14% no-repeat, linear-gradient(#6b4a3a, #6b4a3a) 82% 78% / 22% 14% no-repeat; }
+.r-library .furn { background:
+  repeating-linear-gradient(0deg, #ff7ac6 0 6px, #ffd36b 6px 11px, #7dffb0 11px 16px, #a78bfa 16px 22px) 6% 50% / calc(var(--s,4px) * 3) 56% no-repeat,
+  repeating-linear-gradient(0deg, #a78bfa 0 7px, #7dffb0 7px 12px, #ff7ac6 12px 18px, #ffd36b 18px 23px) 94% 50% / calc(var(--s,4px) * 3) 56% no-repeat; }
+.r-gate .furn { background: linear-gradient(#6b4a3a, #6b4a3a) 50% 100% / 46% calc(var(--s,4px) * 2) no-repeat, linear-gradient(#4a3670, #4a3670) 50% 88% / 34% 12% no-repeat; }
+.r-play .furn::before { content: ""; position: absolute; left: 22%; top: 22%; width: 56%; height: 56%; border-radius: 50%;
+  background: repeating-radial-gradient(circle, #3a2a58 0 calc(var(--s,4px) * 2), #2c2045 calc(var(--s,4px) * 2) calc(var(--s,4px) * 4)); box-shadow: 0 0 0 var(--s,4px) #4a3670; }
+.mhead { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: baseline; gap: 6px; padding: 5px 8px; z-index: 3;
+  font: 700 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: rgba(239,230,255,.75); background: linear-gradient(rgba(10,7,16,.75), transparent); }
+.mhead b { color: var(--ink); }
+.mhead i { font-style: normal; color: rgba(239,230,255,.4); letter-spacing: .06em; text-transform: none; margin-left: auto; }
+.mcount { background: var(--pink); color: #1a1022; padding: 0 5px; border-radius: 2px; }
+.mroom.empty .mcount { background: rgba(239,230,255,.18); color: rgba(239,230,255,.6); }
+.mcrabs { position: relative; z-index: 2; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 2px; max-width: 92%; }
+.mapcrab { background: none; border: 0; padding: 0; cursor: pointer; line-height: 0; filter: drop-shadow(0 2px 0 rgba(0,0,0,.4)); }
+.mapcrab:hover, .mapcrab:focus-visible { transform: scale(1.15); outline: none; }
+.mapcrab.busy svg { animation: scuttle .5s steps(2) infinite; }
+@keyframes scuttle { 50% { transform: translateX(1px) rotate(4deg); } }
+.more-crabs { font: 700 11px var(--mono); color: var(--ink); background: rgba(10,7,16,.7); padding: 1px 5px; border-radius: 2px; }
+.mnames { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; padding: 4px 8px; font: 10.5px var(--mono); color: rgba(239,230,255,.6);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; background: linear-gradient(transparent, rgba(10,7,16,.75)); }
+@media (prefers-reduced-motion: reduce) { .mapcrab.busy svg { animation: none; } .mroom { transition: none; } }
+
+.room-bar { position: absolute; left: 10px; top: 10px; z-index: 180; display: flex; align-items: center; gap: 10px; }
+.room-bar .room-back { font-size: 11px; padding: 4px 10px; }
+.room-name { font: 700 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: rgba(239,230,255,.7); background: rgba(10,7,16,.6); padding: 4px 8px; border-radius: 2px; }
+.pen-scene[data-room="play"] .rug { left: 18%; top: 44%; width: 64%; height: 46%; }
+.pen-scene[data-room="bed"] .sand { left: 0; top: 18%; width: 100%; height: 82%; border-radius: 0; }
+.pen-scene[data-room="library"] .pen-floor { background-color: #1d1530; }
+.pen-scene[data-room="desk"] .pen-floor { background: repeating-linear-gradient(0deg, #2a1f24 0 calc(var(--s,4px) * 6), #241a20 calc(var(--s,4px) * 6) calc(var(--s,4px) * 6 + 2px)); }
+@media (max-width: 700px) {
+  .top { gap: 8px; }
+  .mhead { font-size: 9px; padding: 3px 5px; gap: 4px; letter-spacing: .06em; }
+  .mhead i, .mnames { display: none; }
+  .room-name { font-size: 9px; }
+}
