@@ -12,6 +12,12 @@ const skills = require('./lib/skills');
 const jobs = require('./lib/jobs');
 const logbook = require('./lib/logbook');
 const imsg = require('./lib/imessage');
+const { writeJson } = require('./lib/write-json');
+
+// Node exits on any unhandled error. A background timer hiccup (a session file vanishing
+// mid-read, Messages timing out) should be logged, not take the whole hub down.
+process.on('unhandledRejection', (e) => console.error('[claw-hub] unhandled', e));
+process.on('uncaughtException', (e) => console.error('[claw-hub] uncaught', e));
 
 const PORT = Number(process.env.CLAW_HUB_PORT || 4777);
 const PUBLIC = path.join(__dirname, 'public');
@@ -31,10 +37,7 @@ function readState() {
   s.groups = s.groups || [];
   return s;
 }
-function writeState(s) {
-  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-  fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2));
-}
+function writeState(s) { writeJson(STATE_FILE, s, 2); }
 
 // ---------- helpers ----------
 function send(res, code, body, type = 'application/json') {
@@ -44,8 +47,9 @@ function send(res, code, body, type = 'application/json') {
 function readBody(req, limit = 1e6) {
   return new Promise((resolve) => {
     let data = '';
-    req.on('data', (c) => { data += c; if (data.length > limit) req.destroy(); });
+    req.on('data', (c) => { data += c; if (data.length > limit) { req.destroy(); resolve({}); } });
     req.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch { resolve({}); } });
+    req.on('error', () => resolve({}));
   });
 }
 function osa(script, args = []) {
@@ -150,7 +154,8 @@ function titleOf(sid) {
   return s.label || (m && (m.customTitle || m.aiTitle || (m.firstPrompt || '').slice(0, 50))) || 'a crab';
 }
 const lastStatus = new Map();
-setInterval(async () => {
+setInterval(() => { pingTick().catch((e) => console.error('[claw-hub] imessage ping', e.message)); }, 4000);
+async function pingTick() {
   const cfg = imsg.config();
   if (!cfg.enabled || !cfg.handle) return;
   for (const l of allLive()) {
@@ -170,9 +175,10 @@ setInterval(async () => {
       imsg.saveConfig({ last: l.sessionId });
     } catch (e) { console.error('[claw-hub] imessage', e.message); }
   }
-}, 4000);
+}
 
-setInterval(async () => {
+setInterval(() => { replyTick().catch((e) => console.error('[claw-hub] imessage reply', e.message)); }, 5000);
+async function replyTick() {
   const cfg = imsg.config();
   if (!cfg.enabled || !cfg.handle) return;
   let replies = [];
@@ -193,7 +199,7 @@ setInterval(async () => {
       await imsg.send(`${imsg.TAG} woke #${n} ${titleOf(sid)} in the hub and sent it`);
     } catch (e) { console.error('[claw-hub] imessage route', e.message); }
   }
-}, 5000);
+}
 
 let nightlyDone = '';
 setInterval(() => {
@@ -556,7 +562,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
     const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     const file = path.normalize(path.join(PUBLIC, rel));
-    if (!file.startsWith(PUBLIC) || !fs.existsSync(file)) return send(res, 404, 'not found', 'text/plain');
+    // PUBLIC + sep, so a sibling folder like ../public-old can't slip through
+    let isFile = false; try { isFile = fs.statSync(file).isFile(); } catch { /* missing */ }
+    if (!file.startsWith(PUBLIC + path.sep) || !isFile) return send(res, 404, 'not found', 'text/plain');
     send(res, 200, fs.readFileSync(file), TYPES[path.extname(file)] || 'application/octet-stream');
   } catch (e) {
     console.error('[claw-hub]', e);
