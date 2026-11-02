@@ -35,6 +35,7 @@ function setHtml(el, html) { if (el._html !== html) { el._html = html; el.innerH
 function whereLabel(live) {
   if (!live) return '';
   if (live.inHub) return 'here';
+  if (live.phone) return 'phone';
   if (live.entrypoint === 'claude-vscode') return 'vs code';
   if (live.entrypoint === 'claude-desktop') return 'claude app';
   if (live.tty) return 'terminal';
@@ -49,7 +50,7 @@ function activityText(live) {
 const groupById = (id) => ui.groups.find((g) => g.id === id);
 const cur = () => ui.convos.find((x) => x.id === ui.sel);
 const liveOnes = () => ui.convos.filter((c) => c.live && !c.bot);
-const PARK_WHERE = { 'claude-vscode': 'vs code', 'claude-desktop': 'claude app', cli: 'terminal', hub: 'here', 'sdk-cli': 'here' };
+const PARK_WHERE = { 'claude-vscode': 'vs code', 'claude-desktop': 'claude app', cli: 'terminal', phone: 'phone', hub: 'here', 'sdk-cli': 'here' };
 // parked chats get a stand-in live record so the pen can draw them napping
 const parkedOnes = () => ui.convos.filter((c) => c.parked && !c.live && !c.archived).map((c) => ({
   ...c, live: { parked: true, where: PARK_WHERE[c.parked.where] || c.parked.where, status: 'parked', statusSince: c.parked.since, activity: c.parked.activity || {}, helpers: c.parked.helpers || [] },
@@ -261,8 +262,11 @@ function renderComposer(c) {
   $('#sendForm').classList.toggle('hidden', !!elsewhere);
   const ta = $('#sendText');
   ta.placeholder = live && live.inHub ? 'message claude…' : 'continue this chat here…';
-  $('#sendBtn').textContent = live && live.inHub ? 'send' : 'continue';
-  $('#sendBtn').disabled = ui.sending || !!busy;
+  // claude reads new messages mid-turn and picks them up at its next step,
+  // so a busy chat still takes messages (it used to lock the button for the whole turn)
+  $('#sendBtn').textContent = !(live && live.inHub) ? 'continue' : busy ? 'queue' : 'send';
+  $('#sendBtn').title = busy ? 'claude is working. it reads this at its next step.' : '';
+  $('#sendBtn').disabled = ui.sending;
 }
 
 function toolGroupHtml(tools) {
@@ -439,7 +443,9 @@ async function sendMessage() {
   ui.sending = true; renderComposer(c);
   try {
     if (c.live && c.live.inHub) {
+      const wasBusy = c.live.status === 'busy';
       await api('/api/chat/send', { id: c.id, text, images });
+      if (wasBusy) toast('queued. claude reads it at its next step.');
       c.live.status = 'busy'; c.live.activity = { kind: 'say', text: 'thinking…' };
     } else {
       toast('waking claude up…');

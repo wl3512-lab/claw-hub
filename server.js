@@ -237,7 +237,7 @@ function allLive() {
 }
 
 function liveInfo(live, meta, state) {
-  const info = { pid: live.pid, status: live.status, statusSince: live.statusSince, entrypoint: live.entrypoint, tty: live.tty };
+  const info = { pid: live.pid, status: live.status, statusSince: live.statusSince, entrypoint: live.entrypoint, tty: live.tty, phone: !!live.phone };
   if (meta) {
     info.activity = t.activity(meta);
     // babies that went quiet before this process started died with an earlier one
@@ -285,7 +285,7 @@ function convoSummary(m, state, liveBySession) {
     // haven't opened yet stays parked too, so its babies stay on the beach.
     parked: !live && !isBot && (recent || babies.some((h) => h.sticky))
       ? {
-        where: s.hub ? 'hub' : m.entrypoint || 'cli', since: m.updatedAt, activity: t.activity(m),
+        where: s.hub ? 'hub' : m.phone ? 'phone' : m.entrypoint || 'cli', since: m.updatedAt, activity: t.activity(m),
         // its babies died with its process unless they had already finished
         helpers: (recent ? babies.length ? babies : helpersOf(m, state) : babies.filter((h) => h.sticky))
           .map((h) => (h.status === 'done' ? h : { ...h, status: 'stuck', orphan: true })),
@@ -376,6 +376,13 @@ async function handleApi(req, res, url) {
     if (live.entrypoint === 'claude-vscode') {
       execFile('open', ['-a', 'Visual Studio Code', live.cwd]);
       return send(res, 200, { ok: true, how: 'vscode' });
+    }
+    if (live.phone) {
+      // phone sessions live on claude.ai/code; open this Mac's Remote Control environment there
+      let env = null;
+      try { env = (fs.readFileSync(path.join(process.env.HOME, 'Library/Logs/claw-phone.log'), 'utf8').match(/environment=(env_[A-Za-z0-9]+)/g) || []).pop(); } catch { /* no log */ }
+      execFile('open', [env ? `https://claude.ai/code?${env}` : 'https://claude.ai/code']);
+      return send(res, 200, { ok: true, how: 'phone' });
     }
     if (live.entrypoint === 'claude-desktop') {
       execFile('open', ['-a', 'Claude']);
