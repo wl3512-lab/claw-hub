@@ -59,8 +59,9 @@ function renderCrew(list, now) {
     .sort((a, b) => (CREW_ORDER[a.st.zone] - CREW_ORDER[b.st.zone]) || ((b.c.live.statusSince || 0) - (a.c.live.statusSince || 0)));
   const total = list.reduce((n, c) => n + ((c.work && c.work.outToday) || 0), 0);
   const sleepy = tidyList(list, now);
-  const html = `<h2>crew <span>${list.length} · who's doing what${total ? ` · ${kfmt(total)} written today` : ''}</span>
-      ${sleepy.length ? `<button class="btn tidy" id="tidyUp" title="close crabs asleep over a day (they stay saved)">tidy up ${sleepy.length}</button>` : ''}</h2>` + rows.map(({ c, st }) => {
+  ui.outTotal = total;
+  const html = `<h2>crew <span>${list.length} · who's doing what</span>
+      ${sleepy.length ? `<button class="btn tidy" id="tidyUp" title="close crabs asleep over a day (they stay saved)">tidy up ${sleepy.length}</button>` : ''}</h2>${limitHtml(ui.limits)}` + rows.map(({ c, st }) => {
     const s = crewStatus(c, st, now);
     const g = groupById(c.group);
     const where = c.live.parked ? '' : whereLabel(c.live);
@@ -68,7 +69,7 @@ function renderCrew(list, now) {
     return `<button class="crew-row" data-id="${c.id}">
       <span class="crew-crab">${stillCritter(c)}</span>
       <span class="crew-main">
-        <span class="crew-top"><b>${esc(window.Pen.nameOf(c))}</b><span class="crew-st ${s.cls}">${esc(s.text)}</span></span>
+        <span class="crew-top"><b>${esc(window.Pen.nameOf(c))}</b><span class="crew-st ${s.cls}">${esc(s.text)}</span>${weekShare(c) ? `<span class="crew-share" title="its rough share of your weekly limit today">${weekShare(c)}% of week</span>` : ''}</span>
         <span class="crew-job">${job}</span>
         ${filesHtml(c)}
       </span>
@@ -78,12 +79,40 @@ function renderCrew(list, now) {
   }).join('');
   setHtml(box, html);
 }
+// the weekly limit in perspective: used so far, what today took, and the pace that lasts until it resets
+const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+function resetWhen(ms) {
+  const d = new Date(ms);
+  const h = d.getHours() % 12 || 12;
+  return `${DAYS[d.getDay()]} ${h}${d.getMinutes() ? ':' + String(d.getMinutes()).padStart(2, '0') : ''}${d.getHours() < 12 ? 'am' : 'pm'}`;
+}
+function limitHtml(L) {
+  if (!L || !L.week) return '';
+  const w = L.week;
+  const before = Math.max(0, w.pct - (L.todayPct || 0));
+  const over = L.todayPct > L.perDay;
+  const fresh = Date.now() - L.at < 30 * 60000 ? '' : ` · as of ${ago(L.at)} ago`;
+  const five = L.five ? `<span class="lim-five ${L.five.pct >= 80 ? 'hot' : ''}" title="the 5-hour window resets ${resetWhen(L.five.resetsAt)}">5h window ${Math.round(L.five.pct)}%</span>` : '';
+  return `<div class="limits" title="from Claude's own usage report${fresh}">
+    <div class="lim-bar"><i class="before" style="width:${before}%"></i><i class="today ${over ? 'over' : ''}" style="width:${Math.min(100 - before, L.todayPct || 0)}%"></i><b class="pace" style="left:${Math.min(100, before + L.perDay)}%" title="today's fair share"></b></div>
+    <div class="lim-text"><span><b>week ${Math.round(w.pct)}%</b> used · today ${L.todayPct}%${over ? ' <em>· over pace</em>' : ''}</span>
+      <span>${Math.round(100 - w.pct)}% left for ${L.daysLeft}d ≈ ${L.perDay}%/day · resets ${resetWhen(w.resetsAt)}${fresh}</span>${five}</div>
+  </div>`;
+}
+// a crab's rough share of the week today, from its share of today's output
+function weekShare(c) {
+  const L = ui.limits;
+  const out = c.work && c.work.outToday;
+  if (!L || !L.week || !out || !ui.outTotal || !L.todayPct) return null;
+  return Math.round((out / ui.outTotal) * L.todayPct * 10) / 10;
+}
 function kfmt(n) { return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n); }
 // the last hour, one bar per minute: tall = it was writing that minute
 function stripHtml(c) {
   const s = c.work && c.work.strip;
   if (!s || !s.includes('1')) return '<span class="strip quiet" title="quiet for the last hour">quiet 1h</span>';
-  const out = c.work.outToday ? ` title="${kfmt(c.work.outToday)} tokens written today"` : '';
+  const share = weekShare(c);
+  const out = c.work.outToday ? ` title="${kfmt(c.work.outToday)} tokens written today${share != null ? ` ≈ ${share}% of your week` : ''}"` : '';
   return `<span class="strip"${out}>${[...s].map((b) => `<i class="${b === '1' ? 'on' : ''}"></i>`).join('')}</span>`;
 }
 function filesHtml(c) {
@@ -158,6 +187,7 @@ async function refresh() {
   ui.groups = data.groups || [];
   window.Pen.overlaps = data.overlaps || [];
   ui.clashes = data.clashes || [];
+  ui.limits = data.limits || null;
   notifyChanges();
   const waiting = liveOnes().filter((c) => c.live.status !== 'busy').length;
   $('#tabRoomCount').textContent = waiting ? `!${waiting}` : '';

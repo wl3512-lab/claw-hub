@@ -505,3 +505,18 @@ dialog textarea { resize: vertical; }
 @media (max-width: 640px) { .crew-files span:nth-child(n+3) { display: none; } }
 .crew-where .strip { display: flex; justify-content: flex-end; margin-left: auto; }
 .crew-where .strip.quiet { display: block; margin-top: 4px; }
+
+/* weekly limit in the crew header */
+.limits { padding: 10px 14px 12px; border-bottom: 1px solid var(--line); }
+.lim-bar { position: relative; height: 8px; background: var(--bg-3); border: 1px solid var(--line); display: flex; }
+.lim-bar i { display: block; height: 100%; }
+.lim-bar .before { background: rgba(167,139,250,.45); }
+.lim-bar .today { background: var(--green); }
+.lim-bar .today.over { background: var(--pink); }
+.lim-bar .pace { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: .7; }
+.lim-text { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font: 11px var(--mono); color: var(--faint); }
+.lim-text b { color: var(--ink); font-weight: 700; }
+.lim-text em { font-style: normal; color: var(--pink); }
+.lim-five { margin-left: auto; }
+.lim-five.hot { color: var(--pink); }
+.crew-share { font: 10.5px var(--mono); color: var(--faint); white-space: nowrap; margin-left: auto; }

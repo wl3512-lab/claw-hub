@@ -14,6 +14,7 @@ const logbook = require('./lib/logbook');
 const imsg = require('./lib/imessage');
 const purpose = require('./lib/purpose');
 const work = require('./lib/work');
+const limits = require('./lib/limits');
 const { writeJson } = require('./lib/write-json');
 
 // Node exits on any unhandled error. A background timer hiccup (a session file vanishing
@@ -437,7 +438,8 @@ async function handleApi(req, res, url) {
       live: liveInfo(l, null),
       pinned: false, archived: false, bot: false, empty: true,
     }));
-    return send(res, 200, { convos: orphanLive.concat(convos), groups: state.groups, overlaps, clashes, now: Date.now() });
+    limits.maybeProbe();
+    return send(res, 200, { convos: orphanLive.concat(convos), groups: state.groups, overlaps, clashes, limits: limits.get(), now: Date.now() });
   }
 
   const subMatch = url.pathname.match(/^\/api\/sub\/([0-9a-f-]{36})\/(agent-[a-z0-9]+)$/);
