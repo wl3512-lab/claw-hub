@@ -95,7 +95,7 @@
       if (tile) setRoom(tile.dataset.room);
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && room && !el.closest('.hidden') && !e.target.closest('input, textarea, [contenteditable="true"]')) setRoom(null);
+      if (e.key === 'Escape' && room && !el.closest('.hidden') && !(e.target.closest && e.target.closest('input, textarea, [contenteditable="true"]'))) setRoom(null);
     });
     // hover (or tab to) a crab: a card that says what it's for
     const card = document.createElement('div');
@@ -282,6 +282,7 @@
         place(c);
         el.getBoundingClientRect(); // so the first move animates (walks in through the door)
       }
+      if (c.leaving) { c.leaving = false; c.onArrive = null; c.zone = null; } // changed its mind on the way out
       c.conv = conv; c.st = st;
       const say = sayFor(conv, st);
       const sayEl = c.el.querySelector('.say');

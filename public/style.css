@@ -440,3 +440,4 @@ dialog textarea { resize: vertical; }
 .ask-card .ask-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .ask-card .ask-foot span { flex: 1; font: 11px var(--mono); color: var(--faint); }
 @media (max-width: 640px) { .ask-card .opts { grid-template-columns: 1fr; } .ask-card .ask-foot { flex-wrap: wrap; } }
+.ask-card .typed { margin-top: 6px; font-size: 13px; color: var(--green); }

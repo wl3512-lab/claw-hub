@@ -128,7 +128,7 @@ async function jobTick() {
     if (j.status === 'running' && j.sessionId) {
       const l = live.find((x) => x.sessionId === j.sessionId);
       const run = (j.runs || []).slice(-1)[0] || {};
-      if (!l || (l.status === 'idle' && (l.statusSince || 0) > (run.at || 0) + 1500)) {
+      if (!l || (l.status === 'idle' && !l.pending && (l.statusSince || 0) > (run.at || 0) + 1500)) {
         jobs.update(j.id, { status: j.schedule ? 'todo' : 'done', doneAt: Date.now() });
         if (run.scheduled && l && l.entrypoint === 'hub') hub.stop(j.sessionId); // keep the transcript, free the process
       }
@@ -210,7 +210,7 @@ async function replyTick() {
     const n = sid && imsg.numFor(sid);
     try {
       if (!sid) { await imsg.send(`${imsg.TAG} which crab is that for? start with #number`); continue; }
-      if (hub.has(sid)) { hub.send(sid, text); await imsg.send(`${imsg.TAG} sent to #${n} ${titleOf(sid)}`); continue; }
+      if (hub.has(sid)) { hub.send(sid, text, [], { asAnswer: true }); await imsg.send(`${imsg.TAG} sent to #${n} ${titleOf(sid)}`); continue; }
       const live = t.listLive().find((l) => l.sessionId === sid);
       if (live) { await imsg.send(`${imsg.TAG} #${n} is open in ${live.entrypoint === 'claude-vscode' ? 'VS Code' : live.entrypoint === 'claude-desktop' ? 'the Claude app' : 'Terminal'}, answer it there`); continue; }
       const meta = t.findTranscript(sid);
@@ -361,6 +361,7 @@ async function mergeCrabs(res, keep, drop) {
   const live = allLive();
   const liveOf = (id) => live.find((l) => l.sessionId === id);
   for (const id of [keep, drop]) if (liveOf(id) && liveOf(id).status === 'busy') return send(res, 409, { error: 'one of them is still working. merge once both are waiting for you.' });
+  for (const id of [keep, drop]) if (liveOf(id) && liveOf(id).pending) return send(res, 409, { error: 'one of them asked you something. answer it first, then merge.' });
   if (!liveOf(keep) && !isDir(keepMeta.cwd)) return send(res, 400, { error: `Folder not found: ${keepMeta.cwd}` });
   const text = handoffFrom(dropMeta, readState().convos[drop]);
 
@@ -685,7 +686,7 @@ async function handleApi(req, res, url) {
     const text = String(b.text || '').trim();
     const images = cleanImages(b.images);
     if (!UUID.test(b.id || '') || (!text && !images.length)) return send(res, 400, { error: 'empty message' });
-    try { hub.send(b.id, text, images); return send(res, 200, { ok: true }); } catch (e) { return send(res, 409, { error: e.message }); }
+    try { hub.send(b.id, text, images, { asAnswer: !!b.asAnswer }); return send(res, 200, { ok: true }); } catch (e) { return send(res, 409, { error: e.message }); }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/chat/answer') {

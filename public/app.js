@@ -277,6 +277,11 @@ function askDone(p) {
   const picks = askPicks(p);
   return p.questions.every((q, i) => picks[i] && (q.multiSelect ? picks[i].length : true));
 }
+function typedPick(q, pick) {
+  const labels = (q.options || []).map((o) => o.label);
+  const own = [].concat(pick || []).filter((x) => !labels.includes(x));
+  return own.join(', ');
+}
 function renderAsk(c) {
   const card = $('#askCard');
   const p = c.live && c.live.inHub && c.live.pending;
@@ -293,6 +298,7 @@ function renderAsk(c) {
         <div class="q-text">${esc(q.question)}</div>
         <div class="opts">${(q.options || []).map((o, j) => `<button type="button" class="opt ${on(o) ? 'on' : ''}" data-q="${i}" data-o="${j}">
           <span class="k">${j + 1}</span><b>${esc(o.label)}</b>${o.description ? `<span class="d">${esc(o.description)}</span>` : ''}</button>`).join('')}</div>
+        ${typedPick(q, picks[i]) ? `<div class="typed">✎ ${esc(typedPick(q, picks[i]))}</div>` : ''}
       </div>`;
     }).join('');
     html += `<div class="ask-foot"><span>${quick ? 'tap one, or press its number' : 'pick for each, then send'} · or type your own answer below</span>${quick ? '' : `<button type="button" class="btn primary" data-ask="send" ${askDone(p) ? '' : 'disabled'}>send answers</button>`}</div>`;
@@ -306,16 +312,19 @@ function renderAsk(c) {
   setHtml(card, html);
 }
 async function sendAsk(body) {
-  const c = cur(); if (!c || ui.sending) return;
+  const c = cur(); if (!c || ui.sending) return false;
   ui.sending = true;
+  let ok = false;
   try {
     await api('/api/chat/answer', { id: c.id, ...body });
     c.live.pending = null; c.live.status = 'busy'; c.live.activity = { kind: 'say', text: 'thinking…' };
     ui.ask = null;
+    ok = true;
   } catch (e) { toast(e.message); }
   ui.sending = false;
   const now = cur(); if (now) renderComposer(now);
   setTimeout(loadMsgs, 400);
+  return ok;
 }
 function pickOpt(qi, oi) {
   const c = cur(); const p = c && c.live && c.live.pending;
@@ -345,12 +354,13 @@ $('#askCard').addEventListener('click', (e) => {
   if (b.dataset.ask === 'yes') return sendAsk({ allow: true });
   const txt = $('#sendText').value.trim();
   if (b.dataset.ask === 'no' && !txt && p.kind === 'plan') { $('#sendText').focus(); toast('type what to change, then send'); return; }
-  sendAsk({ allow: false, message: txt || undefined }).then(() => { $('#sendText').value = ''; autosize($('#sendText')); });
+  sendAsk({ allow: false, message: txt || undefined }).then((ok) => { if (ok) { $('#sendText').value = ''; autosize($('#sendText')); } });
 });
 // number keys pick options when you're not typing
 document.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
   if (/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '') || document.activeElement.isContentEditable) return;
+  if (ui.view !== 'chat' || ui.sub || $('#composer').classList.contains('hidden')) return;
   const c = cur(); const p = c && c.live && c.live.inHub && c.live.pending;
   if (!p || p.kind !== 'ask' || $('#askCard').classList.contains('hidden')) return;
   const picks = askPicks(p);
@@ -448,9 +458,10 @@ function leaveSub() {
 async function loadMsgs() {
   if (!ui.sel) return;
   const id = ui.sel;
+  const sub = ui.sub;
   try {
-    const data = await api(ui.sub ? `/api/sub/${id}/${ui.sub}?limit=${ui.limit}` : `/api/convo/${id}?limit=${ui.limit}`);
-    if (ui.sel === id) renderMsgs(data);
+    const data = await api(sub ? `/api/sub/${id}/${sub}?limit=${ui.limit}` : `/api/convo/${id}?limit=${ui.limit}`);
+    if (ui.sel === id && ui.sub === sub) renderMsgs(data);
   } catch (e) {
     if (ui.sel === id) {
       const c = cur();
@@ -555,10 +566,27 @@ document.addEventListener('contextmenu', (e) => {
 // ---------- sending ----------
 function autosize(el) { el.style.height = 'auto'; el.style.height = Math.min(220, el.scrollHeight) + 'px'; }
 
+// typed text while a multiple-choice card is open: fills the first question you haven't picked yet
+function typedAnswer(p, text) {
+  const picks = askPicks(p);
+  let i = p.questions.findIndex((q, k) => !(picks[k] && (q.multiSelect ? picks[k].length : true)));
+  if (i < 0) i = p.questions.length - 1;
+  picks[i] = p.questions[i].multiSelect ? [text] : text;
+  if (askDone(p)) return submitPicks(p);
+  renderAsk(cur());
+  toast('got it. pick the rest, then send');
+  return Promise.resolve(true);
+}
+
 async function sendMessage() {
   const c = cur(); if (!c) return;
   const box = $('#sendText');
   const text = box.value.trim();
+  const asked = c.live && c.live.inHub && c.live.pending;
+  if (asked && asked.kind === 'ask' && text && asked.questions.length > 1) {
+    if (await typedAnswer(asked, text)) { box.value = ''; autosize(box); }
+    return;
+  }
   if ((!text && !ui.att.send.length) || ui.sending) return;
   let images;
   try { images = takeImages('send'); } catch (e) { toast(e.message); return; }
@@ -566,7 +594,7 @@ async function sendMessage() {
   try {
     if (c.live && c.live.inHub) {
       const wasBusy = c.live.status === 'busy';
-      await api('/api/chat/send', { id: c.id, text, images });
+      await api('/api/chat/send', { id: c.id, text, images, asAnswer: !!asked });
       if (wasBusy) toast('queued. claude reads it at its next step.');
       c.live.status = 'busy'; c.live.activity = { kind: 'say', text: 'thinking…' };
     } else {
