@@ -57,7 +57,10 @@ function renderCrew(list, now) {
   if (!list.length) { setHtml(box, ''); return; }
   const rows = list.map((c) => ({ c, st: window.Pen.stateOf(c, now) }))
     .sort((a, b) => (CREW_ORDER[a.st.zone] - CREW_ORDER[b.st.zone]) || ((b.c.live.statusSince || 0) - (a.c.live.statusSince || 0)));
-  const html = `<h2>crew <span>${list.length} · who's doing what</span></h2>` + rows.map(({ c, st }) => {
+  const total = list.reduce((n, c) => n + ((c.work && c.work.outToday) || 0), 0);
+  const sleepy = tidyList(list, now);
+  const html = `<h2>crew <span>${list.length} · who's doing what${total ? ` · ${kfmt(total)} written today` : ''}</span>
+      ${sleepy.length ? `<button class="btn tidy" id="tidyUp" title="close crabs asleep over a day (they stay saved)">tidy up ${sleepy.length}</button>` : ''}</h2>` + rows.map(({ c, st }) => {
     const s = crewStatus(c, st, now);
     const g = groupById(c.group);
     const where = c.live.parked ? '' : whereLabel(c.live);
@@ -67,13 +70,49 @@ function renderCrew(list, now) {
       <span class="crew-main">
         <span class="crew-top"><b>${esc(window.Pen.nameOf(c))}</b><span class="crew-st ${s.cls}">${esc(s.text)}</span></span>
         <span class="crew-job">${job}</span>
+        ${filesHtml(c)}
       </span>
-      <span class="crew-where">${g ? `▸ ${esc(g.name)}` : esc(folderName(c.cwd).replace(/^~$/, 'home'))}${where ? `<br>${esc(where)}` : ''}</span>
+      <span class="crew-where">${g ? `▸ ${esc(g.name)}` : esc(folderName(c.cwd).replace(/^~$/, 'home'))}${where ? `<br>${esc(where)}` : ''}
+        ${stripHtml(c)}</span>
     </button>`;
   }).join('');
   setHtml(box, html);
 }
-$('#crew').addEventListener('click', (e) => { const r = e.target.closest('.crew-row'); if (r) openConvo(r.dataset.id); });
+function kfmt(n) { return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n); }
+// the last hour, one bar per minute: tall = it was writing that minute
+function stripHtml(c) {
+  const s = c.work && c.work.strip;
+  if (!s || !s.includes('1')) return '<span class="strip quiet" title="quiet for the last hour">quiet 1h</span>';
+  const out = c.work.outToday ? ` title="${kfmt(c.work.outToday)} tokens written today"` : '';
+  return `<span class="strip"${out}>${[...s].map((b) => `<i class="${b === '1' ? 'on' : ''}"></i>`).join('')}</span>`;
+}
+function filesHtml(c) {
+  const fs = (c.work && c.work.files) || [];
+  if (!fs.length) return '';
+  const clash = new Set((ui.clashes || []).filter((x) => x.ids.includes(c.id)).map((x) => x.path));
+  const base = (p) => p.split('/').pop();
+  const shown = fs.slice(0, 4).map((f) => `<span class="${clash.has(f.path) ? 'clash' : ''}" title="${esc(shortPath(f.path))}${clash.has(f.path) ? ' · another crab edited this too' : ''}">${esc(base(f.path))}</span>`).join('');
+  return `<span class="crew-files">✎ ${shown}${fs.length > 4 ? `<em>+${fs.length - 4}</em>` : ''}</span>`;
+}
+// crabs with a process that have been asleep over a day (not asking, not working)
+function tidyList(list, now) {
+  return list.filter((c) => c.live && !c.live.parked && c.live.status !== 'busy' && !(c.live.activity || {}).asking
+    && c.live.statusSince && now - c.live.statusSince > 86400000);
+}
+async function tidyUp() {
+  const list = tidyList(liveOnes(), Date.now());
+  if (!list.length) return;
+  const names = list.map((c) => `· ${c.name || c.title}`).join('\n');
+  if (!confirm(`close ${list.length} crab${list.length > 1 ? 's' : ''} asleep for over a day?\n\n${names}\n\nthey stay saved. you can continue any of them later.`)) return;
+  let n = 0;
+  for (const c of list) { try { await api('/api/stop', { id: c.id }); n++; } catch (e) { toast(`${c.name || c.title}: ${e.message}`); } }
+  toast(`closed ${n}. all still saved.`);
+  setTimeout(refresh, 600);
+}
+$('#crew').addEventListener('click', (e) => {
+  if (e.target.closest('#tidyUp')) { tidyUp(); return; }
+  const r = e.target.closest('.crew-row'); if (r) openConvo(r.dataset.id);
+});
 
 function activityText(live) {
   const a = live && live.activity;
@@ -118,6 +157,7 @@ async function refresh() {
   ui.convos = data.convos;
   ui.groups = data.groups || [];
   window.Pen.overlaps = data.overlaps || [];
+  ui.clashes = data.clashes || [];
   notifyChanges();
   const waiting = liveOnes().filter((c) => c.live.status !== 'busy').length;
   $('#tabRoomCount').textContent = waiting ? `!${waiting}` : '';
@@ -175,10 +215,13 @@ function renderRoom() {
   }).filter(Boolean);
   const cut = (x, n) => (x.length > n ? x.slice(0, n - 1) + '…' : x);
   const mergeHtml = merges.map((m) => `<div class="tip tip-merge"><p>two crabs on the same job${m.why ? `: ${esc(m.why)}` : ''}. merge them?</p>
-    <ul class="tip-pair"><li>${esc(cut(m.keep.title, 44))}</li><li>${esc(cut(m.drop.title, 44))}</li></ul>
+    <ul class="tip-pair"><li>${esc(cut(m.keep.name || m.keep.title, 44))}</li><li>${esc(cut(m.drop.name || m.drop.title, 44))}</li></ul>
     <div class="tip-acts"><button class="btn" data-tip="merge" data-keep="${m.keep.id}" data-drop="${m.drop.id}">merge into the first</button><button class="btn" data-tip="keepboth" data-keep="${m.keep.id}" data-drop="${m.drop.id}">keep both</button></div></div>`).join('');
-  setHtml($('#tips'), merges.length || tips.length
-    ? mergeHtml + tips.map((t) => `<div class="tip tip-${t.kind}"><p>${esc(t.text)}</p>${(t.actions || []).length ? `<div class="tip-acts">${t.actions.map((a) => btn(t, a)).join('')}</div>` : ''}</div>`).join('')
+  const nameById = (id) => { const c = ui.convos.find((x) => x.id === id); return c ? (c.name || c.title) : 'a closed crab'; };
+  const clashHtml = (ui.clashes || []).slice(0, 3).map((x) => `<div class="tip tip-clash"><p><b>${esc(x.path.split('/').pop())}</b> was edited by ${x.ids.map((id) => esc(nameById(id))).join(' and ')} in the last few hours. check they aren't undoing each other.</p>
+    <div class="tip-acts">${x.ids.map((id) => `<button class="btn" data-tip="open" data-id="${id}">${esc(cut(nameById(id), 24))}</button>`).join('')}</div></div>`).join('');
+  setHtml($('#tips'), merges.length || tips.length || clashHtml
+    ? clashHtml + mergeHtml + tips.map((t) => `<div class="tip tip-${t.kind}"><p>${esc(t.text)}</p>${(t.actions || []).length ? `<div class="tip-acts">${t.actions.map((a) => btn(t, a)).join('')}</div>` : ''}</div>`).join('')
     : '<p class="tip-none">all calm. nothing needs you.</p>');
   const naps = ui.convos.filter((c) => !c.live && !c.parked && !c.bot && !c.archived && !c.empty && Date.now() - c.updatedAt < 86400000).length;
   $('#napsLink').classList.toggle('hidden', !naps);

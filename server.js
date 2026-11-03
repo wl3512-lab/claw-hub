@@ -13,6 +13,7 @@ const jobs = require('./lib/jobs');
 const logbook = require('./lib/logbook');
 const imsg = require('./lib/imessage');
 const purpose = require('./lib/purpose');
+const work = require('./lib/work');
 const { writeJson } = require('./lib/write-json');
 
 // Node exits on any unhandled error. A background timer hiccup (a session file vanishing
@@ -414,6 +415,20 @@ async function handleApi(req, res, url) {
       c.name = own || purpose.name(c.id) || c.title;
     }
     try { purpose.refresh(open.map((c) => ({ id: c.id, title: c.title, cwd: c.cwd, firstPrompt: c.firstPrompt, lastPrompt: c.lastPrompt })), crabDetail); } catch (e) { console.error('[purpose] refresh failed:', e.message); }
+    // files, last-hour activity and output today for each open crab, plus files two crabs both edited
+    const works = [];
+    for (const c of open) {
+      const meta = t.findTranscript(c.id);
+      let w = null;
+      try { w = meta && work.workOf(meta); } catch (e) { console.error('[work]', e.message); }
+      if (!w) continue;
+      // a side chat starts with a copy of its parent's history: only count its own edits
+      const sideAt = (state.convos[c.id] || {}).sideAt;
+      if (sideAt) w = { ...w, files: w.files.filter((f) => f.ts >= sideAt) };
+      c.work = w;
+      works.push([c.id, w]);
+    }
+    const clashes = work.clashes(works);
     const dismissed = new Set(state.mergeDismissed || []);
     const overlaps = purpose.overlaps(open.map((c) => c.id)).filter((o) => !dismissed.has(pairKey(o.a, o.b)));
     // live sessions that haven't written a transcript yet
@@ -422,7 +437,7 @@ async function handleApi(req, res, url) {
       live: liveInfo(l, null),
       pinned: false, archived: false, bot: false, empty: true,
     }));
-    return send(res, 200, { convos: orphanLive.concat(convos), groups: state.groups, overlaps, now: Date.now() });
+    return send(res, 200, { convos: orphanLive.concat(convos), groups: state.groups, overlaps, clashes, now: Date.now() });
   }
 
   const subMatch = url.pathname.match(/^\/api\/sub\/([0-9a-f-]{36})\/(agent-[a-z0-9]+)$/);
@@ -656,7 +671,7 @@ async function handleApi(req, res, url) {
       if (id === b.id) throw new Error('Claude reused the same session instead of copying it.');
       const st = readState();
       st.convos[id] = {
-        ...(st.convos[id] || {}), hub: true, sideOf: b.id,
+        ...(st.convos[id] || {}), hub: true, sideOf: b.id, sideAt: Date.now(),
         label: `↳ ${task.replace(/\s+/g, ' ').slice(0, 40)}`,
         group: parent.group, hue: parent.hue, shell: parent.shell,
       };
