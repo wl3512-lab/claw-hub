@@ -12,6 +12,7 @@ const skills = require('./lib/skills');
 const jobs = require('./lib/jobs');
 const logbook = require('./lib/logbook');
 const imsg = require('./lib/imessage');
+const purpose = require('./lib/purpose');
 const { writeJson } = require('./lib/write-json');
 
 // Node exits on any unhandled error. A background timer hiccup (a session file vanishing
@@ -293,6 +294,89 @@ function convoSummary(m, state, liveBySession) {
   };
 }
 
+// ---------- merging two crabs that do the same job ----------
+const pairKey = (a, b) => [a, b].sort().join('|');
+function titleFor(meta, st) { return (st && st.label) || meta.customTitle || meta.aiTitle || (meta.firstPrompt || '').slice(0, 60) || 'a chat'; }
+
+// the asks and the last reply of a chat, for the purpose summary and for merge handoffs
+function crabDetail(id) {
+  const meta = t.findTranscript(id);
+  if (!meta) return {};
+  const items = t.loadConvo(meta);
+  const recent = items.filter((i) => i.kind === 'user').slice(-5).map((i) => i.text);
+  const reply = [...items].reverse().find((i) => i.kind === 'assistant');
+  return { recent, lastReply: reply ? reply.text : '' };
+}
+
+function handoffFrom(meta, st) {
+  const items = t.loadConvo(meta);
+  const asks = items.filter((i) => i.kind === 'user').map((i) => i.text.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const pick = asks.length > 8 ? [asks[0], '…', ...asks.slice(-7)] : asks;
+  const reply = [...items].reverse().find((i) => i.kind === 'assistant');
+  const files = [...new Set(items.filter((i) => i.kind === 'tool' && /^(Edit|Write|MultiEdit|NotebookEdit)$/.test(i.name) && i.summary).map((i) => i.summary.replace(process.env.HOME, '~')))].slice(-15);
+  const cut = (x, n) => (x.length > n ? x.slice(0, n - 1) + '…' : x);
+  return [
+    `(Merged in from another chat. Lucy had two chats doing overlapping work and merged "${titleFor(meta, st)}" into this one, so that chat is now closed. `
+      + `Below is what it covered. Take it on as your own context: don't redo finished work, and don't start anything new yet. `
+      + `Reply with two or three short lines: what you picked up from it, and what's still open across both chats.)`,
+    '',
+    `Folder: ${String(meta.cwd || '').replace(process.env.HOME, '~')}`,
+    purpose.get(meta.id) ? `What it was for: ${purpose.get(meta.id)}` : '',
+    '',
+    'What she asked there, in order:',
+    ...pick.map((a) => (a === '…' ? '- …' : `- ${cut(a, 400)}`)),
+    '',
+    reply ? `Where it left off (its last reply):\n${cut(reply.text, 2500)}` : 'It never replied.',
+    files.length ? `\nFiles it edited:\n${files.map((f) => `- ${f}`).join('\n')}` : '',
+  ].filter((x) => x !== '').join('\n');
+}
+
+async function stopSession(id) {
+  if (await hub.stop(id)) return;
+  const live = t.listLive().find((l) => l.sessionId === id);
+  if (!live) return;
+  try { process.kill(live.pid, 'SIGTERM'); } catch { return; }
+  for (let i = 0; i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    try { process.kill(live.pid, 0); } catch { return; }
+  }
+  throw new Error('It did not close in time. Close it by hand and try again.');
+}
+
+const merging = new Set(); // chat ids in a merge right now (a double click shouldn't merge twice)
+
+async function mergeCrabs(res, keep, drop) {
+  const keepMeta = t.findTranscript(keep);
+  const dropMeta = t.findTranscript(drop);
+  if (!keepMeta || !dropMeta) return send(res, 404, { error: 'one of those chats is gone' });
+  const live = allLive();
+  const liveOf = (id) => live.find((l) => l.sessionId === id);
+  for (const id of [keep, drop]) if (liveOf(id) && liveOf(id).status === 'busy') return send(res, 409, { error: 'one of them is still working. merge once both are waiting for you.' });
+  if (!liveOf(keep) && !isDir(keepMeta.cwd)) return send(res, 400, { error: `Folder not found: ${keepMeta.cwd}` });
+  const text = handoffFrom(dropMeta, readState().convos[drop]);
+
+  // 1. hand the notes to the one we keep (moving it into the hub if it's open elsewhere)
+  let keepId = keep;
+  try {
+    if (hub.has(keep) && liveOf(keep)) hub.send(keep, text);
+    else {
+      if (!isDir(keepMeta.cwd)) return send(res, 400, { error: `Folder not found: ${keepMeta.cwd}` });
+      if (liveOf(keep)) await stopSession(keep);
+      keepId = await hub.start({ cwd: keepMeta.cwd, prompt: text, resumeId: keep });
+    }
+  } catch (e) { return send(res, 500, { error: `Couldn't hand over the notes: ${e.message}. Both chats are still saved in chats.` }); }
+  { const st = readState(); st.convos[keepId] = { ...(st.convos[keep] || {}), ...(st.convos[keepId] || {}), hub: true }; writeState(st); }
+
+  // 2. close and file away the other one (only once it really closed)
+  try { await stopSession(drop); } catch (e) {
+    return send(res, 500, { error: `Merged, but the other chat didn't close: ${e.message}` });
+  }
+  const st = readState();
+  st.convos[drop] = { ...(st.convos[drop] || {}), archived: true, mergedInto: keepId };
+  writeState(st);
+  return send(res, 200, { ok: true, id: keepId });
+}
+
 async function handleApi(req, res, url) {
   // Block cross-site requests: only our own page may call the API.
   const origin = req.headers.origin;
@@ -311,13 +395,19 @@ async function handleApi(req, res, url) {
       .filter((m) => !m.empty || liveBySession.has(m.id))
       .map((m) => convoSummary(m, state, liveBySession));
     const known = new Set(convos.map((c) => c.id));
+    // what each open crab is for, and which ones look like the same job
+    const open = convos.filter((c) => !c.bot && !c.archived && (c.live || c.parked));
+    for (const c of convos) c.purpose = purpose.get(c.id);
+    try { purpose.refresh(open.map((c) => ({ id: c.id, title: c.title, cwd: c.cwd, firstPrompt: c.firstPrompt, lastPrompt: c.lastPrompt })), crabDetail); } catch (e) { console.error('[purpose] refresh failed:', e.message); }
+    const dismissed = new Set(state.mergeDismissed || []);
+    const overlaps = purpose.overlaps(open.map((c) => c.id)).filter((o) => !dismissed.has(pairKey(o.a, o.b)));
     // live sessions that haven't written a transcript yet
-    const orphanLive = live.filter((l) => !known.has(l.sessionId)).map((l) => ({
+    const orphanLive = live.filter((l) => !known.has(l.sessionId) && !purpose.isOurs(l.pid, l.cwd)).map((l) => ({
       id: l.sessionId, title: 'New session (nothing typed yet)', cwd: l.cwd, updatedAt: l.statusSince,
       live: liveInfo(l, null),
       pinned: false, archived: false, bot: false, empty: true,
     }));
-    return send(res, 200, { convos: orphanLive.concat(convos), groups: state.groups, now: Date.now() });
+    return send(res, 200, { convos: orphanLive.concat(convos), groups: state.groups, overlaps, now: Date.now() });
   }
 
   const subMatch = url.pathname.match(/^\/api\/sub\/([0-9a-f-]{36})\/(agent-[a-z0-9]+)$/);
@@ -560,6 +650,25 @@ async function handleApi(req, res, url) {
     } catch (e) {
       return send(res, 500, { error: e.message });
     }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/merge/dismiss') {
+    const b = await readBody(req);
+    if (!UUID.test(b.a || '') || !UUID.test(b.b || '')) return send(res, 400, { error: 'bad id' });
+    const st = readState();
+    st.mergeDismissed = [...new Set([...(st.mergeDismissed || []), pairKey(b.a, b.b)])].slice(-200);
+    writeState(st);
+    return send(res, 200, { ok: true });
+  }
+
+  // Merge: "drop" hands its context (asks, last reply, files) to "keep", then closes and gets filed away.
+  // keep has to be running in the hub to receive it, so a keep open in Terminal/VS Code moves here.
+  if (req.method === 'POST' && url.pathname === '/api/merge') {
+    const b = await readBody(req);
+    if (!UUID.test(b.keep || '') || !UUID.test(b.drop || '') || b.keep === b.drop) return send(res, 400, { error: 'bad id' });
+    if (merging.has(b.keep) || merging.has(b.drop)) return send(res, 409, { error: 'already merging those two.' });
+    merging.add(b.keep); merging.add(b.drop);
+    try { return await mergeCrabs(res, b.keep, b.drop); } finally { merging.delete(b.keep); merging.delete(b.drop); }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/chat/send') {

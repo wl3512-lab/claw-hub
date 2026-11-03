@@ -84,6 +84,7 @@ async function refresh() {
   try { data = await api('/api/overview'); } catch { return; }
   ui.convos = data.convos;
   ui.groups = data.groups || [];
+  window.Pen.overlaps = data.overlaps || [];
   notifyChanges();
   const waiting = liveOnes().filter((c) => c.live.status !== 'busy').length;
   $('#tabRoomCount').textContent = waiting ? `!${waiting}` : '';
@@ -127,8 +128,23 @@ function renderRoom() {
     if (a === 'close') return `<button class="btn" data-tip="close" data-id="${t.id}">close</button>`;
     return '';
   };
-  setHtml($('#tips'), tips.length
-    ? tips.map((t) => `<div class="tip tip-${t.kind}"><p>${esc(t.text)}</p>${(t.actions || []).length ? `<div class="tip-acts">${t.actions.map((a) => btn(t, a)).join('')}</div>` : ''}</div>`).join('')
+  // two crabs on the same job: offer to merge (you confirm first)
+  const open = live.concat(parked);
+  const byId = (id) => open.find((c) => c.id === id);
+  const merges = (window.Pen.overlaps || []).map((o) => {
+    const a = byId(o.a), b = byId(o.b);
+    if (!a || !b) return null;
+    // keep the one already in the hub, else the one with more history
+    const keepA = (a.live && a.live.inHub) !== (b.live && b.live.inHub) ? !!(a.live && a.live.inHub) : (a.size || 0) >= (b.size || 0);
+    const [keep, drop] = keepA ? [a, b] : [b, a];
+    return { keep, drop, why: o.why };
+  }).filter(Boolean);
+  const cut = (x, n) => (x.length > n ? x.slice(0, n - 1) + '…' : x);
+  const mergeHtml = merges.map((m) => `<div class="tip tip-merge"><p>two crabs on the same job${m.why ? `: ${esc(m.why)}` : ''}. merge them?</p>
+    <ul class="tip-pair"><li>${esc(cut(m.keep.title, 44))}</li><li>${esc(cut(m.drop.title, 44))}</li></ul>
+    <div class="tip-acts"><button class="btn" data-tip="merge" data-keep="${m.keep.id}" data-drop="${m.drop.id}">merge into the first</button><button class="btn" data-tip="keepboth" data-keep="${m.keep.id}" data-drop="${m.drop.id}">keep both</button></div></div>`).join('');
+  setHtml($('#tips'), merges.length || tips.length
+    ? mergeHtml + tips.map((t) => `<div class="tip tip-${t.kind}"><p>${esc(t.text)}</p>${(t.actions || []).length ? `<div class="tip-acts">${t.actions.map((a) => btn(t, a)).join('')}</div>` : ''}</div>`).join('')
     : '<p class="tip-none">all calm. nothing needs you.</p>');
   const naps = ui.convos.filter((c) => !c.live && !c.parked && !c.bot && !c.archived && !c.empty && Date.now() - c.updatedAt < 86400000).length;
   $('#napsLink').classList.toggle('hidden', !naps);
@@ -385,6 +401,15 @@ async function closeSession(id) {
   try { await api('/api/stop', { id }); toast('closed. still saved.'); setTimeout(refresh, 600); } catch (e) { toast(e.message); }
 }
 
+async function mergeCrabs(keepId, dropId) {
+  const keep = ui.convos.find((x) => x.id === keepId), drop = ui.convos.find((x) => x.id === dropId);
+  if (!keep || !drop) return;
+  const moves = keep.live && !keep.live.inHub ? `\n\n"${keep.title}" is open in ${whereLabel(keep.live)}. it closes there and keeps going here in claw hub.` : '';
+  if (!confirm(`merge "${drop.title}" into "${keep.title}"?\n\n"${keep.title}" gets a summary of everything "${drop.title}" was asked, where it left off, and which files it edited.\n\n"${drop.title}" then closes and gets filed away. it stays saved in chats.${moves}`)) return;
+  toast('merging…');
+  try { const r = await api('/api/merge', { keep: keepId, drop: dropId }); toast('merged. it\'s reading the other crab\'s notes.'); await refresh(); openConvo(r.id); } catch (e) { toast(e.message); }
+}
+
 // ---------- crab look picker ----------
 const HUES = [0, 18, 36, 54, 90, 130, 165, 190, 210, 235, 260, 285, 310, 335];
 function lookHtml(c) {
@@ -532,6 +557,10 @@ document.addEventListener('click', async (e) => {
     if (tip.dataset.tip === 'fresh') { openConvo(id); openEnhance(); }
     if (tip.dataset.tip === 'open') openConvo(id);
     if (tip.dataset.tip === 'close') closeSession(id);
+    if (tip.dataset.tip === 'merge') mergeCrabs(tip.dataset.keep, tip.dataset.drop);
+    if (tip.dataset.tip === 'keepboth') {
+      try { await api('/api/merge/dismiss', { a: tip.dataset.keep, b: tip.dataset.drop }); toast('ok, keeping both. won\'t ask again.'); refresh(); } catch (err) { toast(err.message); }
+    }
     return;
   }
   const baby = e.target.closest('.crab.baby');

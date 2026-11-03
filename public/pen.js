@@ -97,6 +97,32 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && room && !el.closest('.hidden') && !e.target.closest('input, textarea, [contenteditable="true"]')) setRoom(null);
     });
+    // hover (or tab to) a crab: a card that says what it's for
+    const card = document.createElement('div');
+    card.className = 'crab-card hidden';
+    card.setAttribute('role', 'tooltip');
+    document.body.appendChild(card);
+    const crabEl = (t) => t.closest && (t.closest('.mapcrab') || t.closest('.crab:not(.baby)'));
+    const show = (e) => {
+      const t = crabEl(e.target);
+      if (!t || !last) return;
+      const conv = last[0].find((c) => c.id === t.dataset.id);
+      if (!conv) return;
+      card.innerHTML = cardHtml(conv, last[1]);
+      card.classList.remove('hidden');
+      const r = t.getBoundingClientRect();
+      const w = card.offsetWidth, h = card.offsetHeight;
+      let x = r.left + r.width / 2 - w / 2, y = r.top - h - 10;
+      if (y < 8) y = r.bottom + 10;
+      x = Math.max(8, Math.min(window.innerWidth - w - 8, x));
+      card.style.left = x + 'px'; card.style.top = y + 'px';
+    };
+    const hide = (e) => { if (!e.relatedTarget || crabEl(e.relatedTarget) !== crabEl(e.target)) card.classList.add('hidden'); };
+    el.addEventListener('mouseover', show);
+    el.addEventListener('mouseout', hide);
+    el.addEventListener('focusin', show);
+    el.addEventListener('focusout', () => card.classList.add('hidden'));
+    el.addEventListener('click', () => card.classList.add('hidden'));
     window.addEventListener('resize', () => { penEl._propsKey = ''; if (last) render(...last); for (const c of crabs.values()) place(c); });
   }
 
@@ -173,6 +199,26 @@
 
   const escHtml = (t) => String(t).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 
+  // ---------- hover card ----------
+  const WHERE = { 'claude-vscode': 'vs code', 'claude-desktop': 'claude app', cli: 'terminal', hub: 'claw hub', 'sdk-cli': 'claw hub' };
+  function cardHtml(conv, now) {
+    const st = stateOf(conv, now);
+    const what = conv.purpose
+      ? escHtml(conv.purpose)
+      : conv.firstPrompt ? `<span class="cc-dim">(still figuring it out) first ask:</span> "${escHtml(short(conv.firstPrompt, 140))}"`
+        : '<span class="cc-dim">no job yet. nothing typed.</span>';
+    const l = conv.live || {};
+    const where = l.parked ? l.where : l.inHub ? 'claw hub' : l.phone ? 'phone' : WHERE[l.entrypoint] || (l.tty ? 'terminal' : l.entrypoint || '');
+    const twins = (window.Pen.overlaps || []).filter((o) => o.a === conv.id || o.b === conv.id).map((o) => {
+      const other = last && last[0].find((c) => c.id === (o.a === conv.id ? o.b : o.a));
+      return other ? `<p class="cc-twin">same job as <b>${escHtml(short(other.title, 40))}</b>? ${escHtml(o.why || '')}</p>` : '';
+    }).join('');
+    return `<b class="cc-title">${escHtml(conv.title)}</b>
+      <p class="cc-for"><i>for</i>${what}</p>
+      <p class="cc-now"><i>now</i>${escHtml(sayFor(conv, st))}</p>
+      <p class="cc-meta">${escHtml(short(conv.cwd || '', 40))}${where ? ` · ${escHtml(where)}` : ''}</p>${twins}`;
+  }
+
   // ---------- the map (top view) ----------
   const MAX_ICONS = 12;
   function renderMap(zones) {
@@ -184,7 +230,7 @@
       const icons = list.slice(0, MAX_ICONS).map((conv) => {
         const l = lookFor(conv);
         const busy = conv.live.status === 'busy' && !conv.live.parked;
-        return `<button class="mapcrab${busy ? ' busy' : ''}" data-id="${conv.id}" title="${escHtml(conv.title)}">${topCritter(l.hue, S * 9, l.shell)}</button>`;
+        return `<button class="mapcrab${busy ? ' busy' : ''}" data-id="${conv.id}" aria-label="${escHtml(conv.title)}">${topCritter(l.hue, S * 9, l.shell)}</button>`;
       }).join('') + (list.length > MAX_ICONS ? `<span class="more-crabs">+${list.length - MAX_ICONS}</span>` : '');
       const names = list.slice(0, 3).map((c) => escHtml(c.title.length > 20 ? c.title.slice(0, 19) + '…' : c.title)).join(' · ')
         + (list.length > 3 ? ` · +${list.length - 3}` : '');
@@ -441,5 +487,5 @@
     return out.slice(0, 5);
   }
 
-  window.Pen = { buildPen, render, tips, stateOf };
+  window.Pen = { buildPen, render, tips, stateOf, overlaps: [] };
 })();
