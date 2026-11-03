@@ -10,6 +10,7 @@
     Skill: 'using skill', TodoWrite: 'planning', AskUserQuestion: 'asking you', ExitPlanMode: 'showing you a plan' };
   function short(t, n = 46) { t = String(t || '').replace(/\s+/g, ' ').trim(); t = t.replace(/^\/Users\/[^/]+/, '~'); return t.length > n ? t.slice(0, n - 1) + '…' : t; }
   function base(p) { return /^[~\/]/.test(p) && !/\s/.test(p) ? p.split('/').pop() : p; }
+  const nameOf = (c) => c.name || c.title || 'a crab';
   function sayFor(c, st) {
     const a = (c.live && c.live.activity) || {};
     if (c.live.parked) return `parked in ${c.live.where}. send me a message to wake me up`;
@@ -66,8 +67,8 @@
     const grid = (cols, x0, dx, y0, dy) => { for (let i = 0; i < n; i++) out.push([x0 + (i % cols) * dx, y0 + Math.floor(i / cols) * dy]); };
     if (id === 'desk') { const cols = n <= 4 ? 2 : n <= 9 ? 3 : 4; grid(cols, 50 - (cols - 1) * 12 + 4, 24, 36, n > cols * 2 ? 22 : 28); }
     else if (id === 'library') grid(4, 15, 23, 50, 22);
-    else if (id === 'gate') { for (let i = 0; i < n; i++) { const k = Math.ceil(i / 2) * (i % 2 ? -1 : 1); out.push([50 + k * 13, 92 - Math.floor(i / 7) * 20]); } }
-    else if (id === 'bed') grid(5, 14, 18, 46, 22);
+    else if (id === 'gate') { for (let i = 0; i < n; i++) { const k = Math.ceil(i / 2) * (i % 2 ? -1 : 1); out.push([50 + k * 18, 92 - Math.floor(i / 5) * 22]); } }
+    else if (id === 'bed') grid(4, 14, 24, 46, 24); // wide enough that job lines don't touch
     return out.map(([x, y]) => [Math.max(6, Math.min(94, x)), Math.max(24, Math.min(97, y))]);
   }
 
@@ -213,7 +214,7 @@
       const other = last && last[0].find((c) => c.id === (o.a === conv.id ? o.b : o.a));
       return other ? `<p class="cc-twin">same job as <b>${escHtml(short(other.title, 40))}</b>? ${escHtml(o.why || '')}</p>` : '';
     }).join('');
-    return `<b class="cc-title">${escHtml(conv.title)}</b>
+    return `<b class="cc-title">${escHtml(nameOf(conv))}</b>${nameOf(conv) !== conv.title ? `<span class="cc-sub">${escHtml(short(conv.title, 60))}</span>` : ''}
       <p class="cc-for"><i>for</i>${what}</p>
       <p class="cc-now"><i>now</i>${escHtml(sayFor(conv, st))}</p>
       <p class="cc-meta">${escHtml(short(conv.cwd || '', 40))}${where ? ` · ${escHtml(where)}` : ''}</p>${twins}`;
@@ -230,16 +231,15 @@
       const icons = list.slice(0, MAX_ICONS).map((conv) => {
         const l = lookFor(conv);
         const busy = conv.live.status === 'busy' && !conv.live.parked;
-        return `<button class="mapcrab${busy ? ' busy' : ''}" data-id="${conv.id}" aria-label="${escHtml(conv.title)}">${topCritter(l.hue, S * 9, l.shell)}</button>`;
+        const nm = nameOf(conv);
+        return `<button class="mapcrab${busy ? ' busy' : ''}" data-id="${conv.id}" aria-label="${escHtml(nm)}">${topCritter(l.hue, S * 9, l.shell)}<span class="mlabel" style="--hue:${l.hue}">${escHtml(nm.length > 24 ? nm.slice(0, 23) + '…' : nm)}</span></button>`;
       }).join('') + (list.length > MAX_ICONS ? `<span class="more-crabs">+${list.length - MAX_ICONS}</span>` : '');
-      const names = list.slice(0, 3).map((c) => escHtml(c.title.length > 20 ? c.title.slice(0, 19) + '…' : c.title)).join(' · ')
-        + (list.length > 3 ? ` · +${list.length - 3}` : '');
       return `<div class="mroom r-${r.id}${list.length ? '' : ' empty'}" data-room="${r.id}" role="button" tabindex="0" aria-label="${r.name}: ${list.length} crabs"
           style="left:${x0}%;top:${y0}%;width:${x1 - x0}%;height:${y1 - y0}%">
         <div class="furn"></div>
         <div class="mhead"><b>${r.name}</b><span class="mcount">${list.length}</span><i>${r.blurb}</i></div>
         <div class="mcrabs">${icons}</div>
-        <div class="mnames">${list.length ? names : 'empty'}</div>
+        ${list.length ? '' : '<div class="mnames">empty</div>'}
       </div>`;
     }).join('');
     const map = penEl.querySelector('.pen-map');
@@ -275,7 +275,7 @@
         const el = document.createElement('button');
         el.className = 'crab';
         el.dataset.id = conv.id;
-        el.innerHTML = '<span class="say"></span><span class="fxs"></span><span class="spr"></span><span class="tag"></span>';
+        el.innerHTML = '<span class="say"></span><span class="fxs"></span><span class="spr"></span><span class="tag"></span><span class="job"></span>';
         container.appendChild(el);
         c = { el, x: 50, y: 99, zone: null, pose: null, facing: 1, movingUntil: 0, key: '' };
         crabs.set(conv.id, c);
@@ -296,17 +296,18 @@
       }
       const moving = Date.now() < c.movingUntil;
       const pose = moving ? 'walk' : st.pose;
-      const key = `${pose}|${st.fx}|${st.pct}|${conv.title}|${c.facing}|${conv.hue}|${conv.shell}`;
+      const key = `${pose}|${st.fx}|${st.pct}|${nameOf(conv)}|${conv.purpose}|${c.facing}|${conv.hue}|${conv.shell}`;
       if (key !== c.key) {
         c.key = key;
         c.el.className = `crab z-${c.zone} p-${st.pose}${moving ? ' moving' : ''}`;
         c.el.querySelector('.spr').innerHTML = spriteHtml(c, conv, pose);
         c.el.querySelector('.spr').style.transform = c.facing < 0 ? 'scaleX(-1)' : '';
         c.el.querySelector('.fxs').innerHTML = moving ? '' : fxHtml(st) + meterHtml(st.pct);
-        const short = conv.title.length > 22 ? conv.title.slice(0, 21) + '…' : conv.title;
-        c.el.querySelector('.tag').textContent = short;
+        const nm = nameOf(conv);
+        c.el.querySelector('.tag').textContent = nm.length > 22 ? nm.slice(0, 21) + '…' : nm;
+        c.el.querySelector('.job').textContent = conv.purpose ? short(conv.purpose, 70) : '';
         c.el.removeAttribute('title');
-        c.el.setAttribute('aria-label', `${conv.title}: ${say}`);
+        c.el.setAttribute('aria-label', `${nameOf(conv)}: ${say}`);
       }
     });
     // crabs that moved to another place walk out the door
@@ -368,7 +369,7 @@
           const el = document.createElement('button');
           el.className = 'crab baby hatch';
           el.dataset.sub = key;
-          el.innerHTML = '<span class="say"></span><span class="fxs"></span><span class="spr"></span><span class="tag"></span>';
+          el.innerHTML = '<span class="say"></span><span class="fxs"></span><span class="spr"></span><span class="tag"></span><span class="job"></span>';
           el.querySelector('.tag').textContent = h.description.length > 22 ? h.description.slice(0, 21) + '…' : h.description;
           container.appendChild(el);
           b = { el, x: mom.x, y: mom.y, facing: 1, movingUntil: 0, key: '', hue: lookFor(conv).hue, shell: lookFor(conv).shell, h, conv, hatching: true };
@@ -443,7 +444,7 @@
     c.el.className = `crab z-${c.zone} p-${st.pose}`;
     c.el.querySelector('.spr').innerHTML = spriteHtml(c, conv, pose);
     c.el.querySelector('.fxs').innerHTML = fxHtml(st) + meterHtml(st.pct);
-    c.key = `${pose}|${st.fx}|${st.pct}|${conv.title}|${c.facing}`;
+    c.key = `${pose}|${st.fx}|${st.pct}|${nameOf(conv)}|${c.facing}`;
   }
 
   // idle critters wander around the rug
@@ -469,24 +470,24 @@
     if (limit) out.push({ kind: 'limit', text: `usage limit hit. claude picks back up ${limit.at ? 'at ' + limit.at : 'later'}.` });
     for (const c of convos) {
       const a = c.live.activity || {};
-      if (a.ctxPct >= 85) out.push({ kind: 'full', id: c.id, text: `${c.title} is ${a.ctxPct}% full. compact it now, or it auto-compacts soon and loses detail.`, actions: ['compact', 'fresh'] });
+      if (a.ctxPct >= 85) out.push({ kind: 'full', id: c.id, text: `${nameOf(c)} is ${a.ctxPct}% full. compact it now, or it auto-compacts soon and loses detail.`, actions: ['compact', 'fresh'] });
     }
     for (const c of convos) {
       const a = c.live.activity || {};
-      if (a.asking && c.live.status !== 'busy') out.push({ kind: 'ask', id: c.id, text: `${c.title} asked you something.`, actions: ['open'] });
+      if (a.asking && c.live.status !== 'busy') out.push({ kind: 'ask', id: c.id, text: `${nameOf(c)} asked you something.`, actions: ['open'] });
     }
     for (const c of convos) {
       const a = c.live.activity || {};
-      if (a.ctxPct >= 70 && a.ctxPct < 85) out.push({ kind: 'warm', id: c.id, text: `${c.title} is ${a.ctxPct}% full. a good time to /compact is between tasks.`, actions: ['compact'] });
+      if (a.ctxPct >= 70 && a.ctxPct < 85) out.push({ kind: 'warm', id: c.id, text: `${nameOf(c)} is ${a.ctxPct}% full. a good time to /compact is between tasks.`, actions: ['compact'] });
     }
     const sleepy = convos.filter((c) => c.live.status !== 'busy' && now - (c.live.statusSince || now) > 2 * 3600 * 1000);
-    for (const c of sleepy.slice(0, 2)) out.push({ kind: 'old', id: c.id, text: `${c.title} has waited ${Math.round((now - c.live.statusSince) / 3600000)}h. close it if you're done.`, actions: ['close'] });
+    for (const c of sleepy.slice(0, 2)) out.push({ kind: 'old', id: c.id, text: `${nameOf(c)} has waited ${Math.round((now - c.live.statusSince) / 3600000)}h. close it if you're done.`, actions: ['close'] });
     for (const c of convos) for (const h of c.live.helpers || []) {
-      if (h.status === 'stuck') out.push({ kind: 'full', id: c.id, text: `a baby of ${c.title} ("${h.description}") has gone quiet for minutes. check on it.`, actions: ['open'] });
+      if (h.status === 'stuck') out.push({ kind: 'full', id: c.id, text: `a baby of ${nameOf(c)} ("${h.description}") has gone quiet for minutes. check on it.`, actions: ['open'] });
     }
     if (convos.length >= 6) out.push({ kind: 'many', text: `${convos.length} sessions open. sleeping ones still use memory, close a few.` });
     return out.slice(0, 5);
   }
 
-  window.Pen = { buildPen, render, tips, stateOf, overlaps: [] };
+  window.Pen = { buildPen, render, tips, stateOf, sayFor, nameOf, overlaps: [] };
 })();

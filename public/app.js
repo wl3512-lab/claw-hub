@@ -42,6 +42,39 @@ function whereLabel(live) {
   return live.entrypoint || '';
 }
 function mood(c) { return !c.live ? 'nap' : c.live.status === 'busy' ? 'busy' : 'idle'; }
+// ---------- crew list: every crab in one line, the ones that need you first ----------
+const CREW_ORDER = { gate: 0, play: 1, desk: 2, library: 2, bed: 3 };
+function crewStatus(c, st, now) {
+  const since = c.live.statusSince ? ago(c.live.statusSince) : '';
+  if (st.zone === 'gate') return { cls: 'ask', text: `asking you${since ? ` · ${since}` : ''}` };
+  if (st.zone === 'desk' || st.zone === 'library') return { cls: 'busy', text: window.Pen.sayFor(c, st) };
+  if (c.live.parked) return { cls: 'nap', text: `parked in ${c.live.where}` };
+  if (st.zone === 'bed') return { cls: 'nap', text: st.pose === 'tired' ? st.label : `asleep${since ? ` · ${since}` : ''}` };
+  return { cls: 'turn', text: `your turn${since ? ` · ${since}` : ''}` };
+}
+function renderCrew(list, now) {
+  const box = $('#crew');
+  if (!list.length) { setHtml(box, ''); return; }
+  const rows = list.map((c) => ({ c, st: window.Pen.stateOf(c, now) }))
+    .sort((a, b) => (CREW_ORDER[a.st.zone] - CREW_ORDER[b.st.zone]) || ((b.c.live.statusSince || 0) - (a.c.live.statusSince || 0)));
+  const html = `<h2>crew <span>${list.length} · who's doing what</span></h2>` + rows.map(({ c, st }) => {
+    const s = crewStatus(c, st, now);
+    const g = groupById(c.group);
+    const where = c.live.parked ? '' : whereLabel(c.live);
+    const job = c.purpose ? esc(c.purpose) : c.firstPrompt ? `<i>first ask:</i> ${esc(c.firstPrompt.slice(0, 120))}` : '<i>no job yet</i>';
+    return `<button class="crew-row" data-id="${c.id}">
+      <span class="crew-crab">${stillCritter(c)}</span>
+      <span class="crew-main">
+        <span class="crew-top"><b>${esc(window.Pen.nameOf(c))}</b><span class="crew-st ${s.cls}">${esc(s.text)}</span></span>
+        <span class="crew-job">${job}</span>
+      </span>
+      <span class="crew-where">${g ? `▸ ${esc(g.name)}` : esc(folderName(c.cwd).replace(/^~$/, 'home'))}${where ? `<br>${esc(where)}` : ''}</span>
+    </button>`;
+  }).join('');
+  setHtml(box, html);
+}
+$('#crew').addEventListener('click', (e) => { const r = e.target.closest('.crew-row'); if (r) openConvo(r.dataset.id); });
+
 function activityText(live) {
   const a = live && live.activity;
   if (!a) return 'working';
@@ -99,7 +132,7 @@ function notifyChanges() {
     const now = c.live ? c.live.status : null;
     const before = ui.lastStatus.get(c.id);
     if (before === 'busy' && now === 'idle' && 'Notification' in window && Notification.permission === 'granted' && (document.hidden || c.id !== ui.sel)) {
-      const n = new Notification('your turn', { body: c.title, icon: 'icon.svg' });
+      const n = new Notification('your turn', { body: c.name || c.title, icon: 'icon.svg' });
       n.onclick = () => { window.focus(); openConvo(c.id); };
     }
     ui.lastStatus.set(c.id, now);
@@ -120,6 +153,7 @@ function renderRoom() {
     ? `<span class="g"><b>${waiting}</b> waiting for you</span> · <span class="p"><b>${busy}</b> working</span>${parked.length ? ` · <b>${parked.length}</b> parked` : ''}`
     : parked.length ? `<b>${parked.length}</b> parked · nothing running right now` : 'the pen is empty. start one with + new');
   window.Pen.render(live.concat(parked), now);
+  renderCrew(live.concat(parked), now);
   const tips = window.Pen.tips(live, now);
   const btn = (t, a) => {
     if (a === 'compact') return `<button class="btn" data-tip="compact" data-id="${t.id}" title="ask it to /compact">compact</button>`;
@@ -185,7 +219,7 @@ function visible() {
     if (f.startsWith('g:') && c.group !== f.slice(2)) return false;
     if (q) {
       const g = groupById(c.group);
-      const hay = `${c.title} ${c.autoTitle || ''} ${c.firstPrompt || ''} ${c.lastPrompt || ''} ${c.cwd || ''} ${c.note || ''} ${g ? g.name : ''}`.toLowerCase();
+      const hay = `${c.name || ''} ${c.purpose || ''} ${c.title} ${c.autoTitle || ''} ${c.firstPrompt || ''} ${c.lastPrompt || ''} ${c.cwd || ''} ${c.note || ''} ${g ? g.name : ''}`.toLowerCase();
       if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
     }
     return true;
@@ -212,7 +246,7 @@ function renderList() {
     const r = c.live ? `<span class="r ${mood(c)}">${c.live.status === 'busy' ? 'working' : 'your turn'}</span>` : `<span class="r">${esc(ago(c.updatedAt))}</span>`;
     return `<button class="row" data-id="${c.id}">
       ${stillCritter(c)}
-      <div style="min-width:0"><div class="t">${c.pinned ? '★ ' : ''}${esc(c.title)}</div>
+      <div style="min-width:0"><div class="t">${c.pinned ? '★ ' : ''}${esc(c.name || c.title)}</div>
       <div class="s">${esc(folderName(c.cwd))}${g ? ` · ▸ ${esc(g.name)}` : ''}${c.note ? ` · <span class="rnote">${esc(c.note)}</span>` : ''}</div></div>
       ${r}
     </button>`;
@@ -236,7 +270,7 @@ function renderHead(c) {
   setHtml($('#chatCritter'), crab(c, m, 46));
   renderLookPicker(c);
   const h1 = $('#cTitle');
-  if (document.activeElement !== h1) h1.textContent = c.title;
+  if (document.activeElement !== h1) h1.textContent = c.name || c.title;
   const g = groupById(c.group);
   const status = c.live ? `<span class="${m}">● ${m === 'busy' ? 'working' : 'your turn'}</span> in ${esc(whereLabel(c.live))} · ` : '';
   setHtml($('#cSub'), `${status}${esc(shortPath(c.cwd))}${g ? ` · ▸ ${esc(g.name)}` : ''} · started ${esc(ago(c.createdAt))} ago`);
@@ -488,7 +522,7 @@ function openConvo(id) {
 async function setState(patch, id = ui.sel) {
   const c = ui.convos.find((x) => x.id === id); if (!c) return;
   Object.assign(c, patch);
-  if ('label' in patch) c.title = patch.label || c.autoTitle || (c.firstPrompt || '').slice(0, 80) || 'untitled';
+  if ('label' in patch) { c.title = patch.label || c.autoTitle || (c.firstPrompt || '').slice(0, 80) || 'untitled'; c.name = patch.label || c.title; }
   if (c.id === ui.sel) renderHead(c);
   try { await api('/api/state', { id: c.id, ...patch }); } catch (e) { toast(e.message); }
 }
@@ -538,7 +572,7 @@ function openLookPop(id, x, y) {
   const c = ui.convos.find((v) => v.id === id); if (!c) return;
   lookTarget = id;
   const pop = $('#lookPop');
-  $('#lookPopTitle').textContent = c.title;
+  $('#lookPopTitle').textContent = c.name || c.title;
   setHtml(pop.querySelector('[data-look]'), lookHtml(c));
   pop.classList.remove('hidden');
   pop.style.left = Math.min(x, innerWidth - 230) + 'px';
@@ -761,7 +795,7 @@ h1.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefaul
 h1.addEventListener('blur', () => {
   const c = cur(); if (!c) return;
   const v = h1.textContent.trim();
-  if (v === c.title) return;
+  if (v === (c.name || c.title)) return;
   setState({ label: v === (c.autoTitle || '') ? '' : v });
 });
 const noteEl = $('#cNote');

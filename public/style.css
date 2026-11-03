@@ -441,3 +441,48 @@ dialog textarea { resize: vertical; }
 .ask-card .ask-foot span { flex: 1; font: 11px var(--mono); color: var(--faint); }
 @media (max-width: 640px) { .ask-card .opts { grid-template-columns: 1fr; } .ask-card .ask-foot { flex-wrap: wrap; } }
 .ask-card .typed { margin-top: 6px; font-size: 13px; color: var(--green); }
+
+/* who's who: names on the map, job lines in rooms, the crew list */
+.pen-col { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.mcrabs { gap: 6px 10px; }
+.mapcrab { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.mapcrab:hover, .mapcrab:focus-visible { transform: none; }
+.mapcrab:hover svg, .mapcrab:focus-visible svg { transform: scale(1.15); }
+.mapcrab .mlabel { line-height: 1.2; font: 700 10px var(--mono); color: var(--ink); background: rgba(10,7,16,.78); padding: 1px 5px; border-radius: 2px;
+  border-bottom: 2px solid hsl(var(--hue, 300) 80% 65%); white-space: nowrap; }
+.mapcrab:hover .mlabel, .mapcrab:focus-visible .mlabel { background: var(--pink); color: #1a0b16; }
+.crab .job { order: 4; max-width: 170px; font: 10px/1.3 var(--sans); color: rgba(239,230,255,.72); text-align: center; margin-top: 2px;
+  text-shadow: 0 1px 2px rgba(0,0,0,.9); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.crab .job:empty { display: none; }
+.crab.z-desk .job { display: none; }
+.crab-card .cc-sub { display: block; font-size: 11px; color: var(--faint); margin-bottom: 4px; }
+
+.crew { border: 1px solid var(--line); background: var(--bg-2); }
+.crew:empty { display: none; }
+.crew h2 { margin: 0; padding: 10px 14px; font: 700 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line); }
+.crew h2 span { font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); margin-left: 6px; }
+.crew-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 12px; align-items: center; width: 100%; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid var(--line); padding: 8px 14px; cursor: pointer; }
+.crew-row:last-child { border-bottom: 0; }
+.crew-row:hover, .crew-row:focus-visible { background: var(--bg-3); outline: none; }
+.crew-crab { line-height: 0; }
+.crew-crab svg { width: 40px; height: auto; }
+.crew-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.crew-top { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.crew-top b { font-weight: 700; font-size: 14px; white-space: nowrap; }
+.crew-st { font: 11px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.crew-st.ask { color: var(--pink); }
+.crew-st.ask::before { content: "● "; }
+.crew-st.turn { color: var(--green); }
+.crew-st.busy { color: var(--lav); }
+.crew-st.nap { color: var(--faint); }
+.crew-job { font-size: 13px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crew-job i { color: var(--faint); }
+.crew-where { font: 11px/1.4 var(--mono); color: var(--faint); text-align: right; white-space: nowrap; }
+@media (max-width: 640px) {
+  .crew-row { grid-template-columns: 32px minmax(0, 1fr); }
+  .crew-where { display: none; }
+  .crew-top { flex-wrap: wrap; gap: 0 8px; }
+  .crew-job { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+}
+@media (max-width: 640px) { .mapcrab .mlabel { display: none; } }

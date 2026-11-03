@@ -407,7 +407,12 @@ async function handleApi(req, res, url) {
     const known = new Set(convos.map((c) => c.id));
     // what each open crab is for, and which ones look like the same job
     const open = convos.filter((c) => !c.bot && !c.archived && (c.live || c.parked));
-    for (const c of convos) c.purpose = purpose.get(c.id);
+    // display name: your own rename wins, then the crab's nickname, then its title
+    for (const c of convos) {
+      c.purpose = purpose.get(c.id);
+      const own = (state.convos[c.id] || {}).label;
+      c.name = own || purpose.name(c.id) || c.title;
+    }
     try { purpose.refresh(open.map((c) => ({ id: c.id, title: c.title, cwd: c.cwd, firstPrompt: c.firstPrompt, lastPrompt: c.lastPrompt })), crabDetail); } catch (e) { console.error('[purpose] refresh failed:', e.message); }
     const dismissed = new Set(state.mergeDismissed || []);
     const overlaps = purpose.overlaps(open.map((c) => c.id)).filter((o) => !dismissed.has(pairKey(o.a, o.b)));
