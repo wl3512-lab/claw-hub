@@ -183,11 +183,14 @@ async function pingTick() {
     const meta = t.findTranscript(l.sessionId);
     if (!meta || (meta.bot && !(readState().convos[l.sessionId] || {}).hub)) continue;
     const a = t.activity(meta) || {};
-    const asking = !!a.asking;
+    const asking = !!a.asking || !!l.pending;
     if ((asking && !cfg.onAsk) || (!asking && !cfg.onDone)) continue;
     if (cfg.onlyAway && imsg.idleSeconds() < 120) continue;
     const n = imsg.numFor(l.sessionId);
-    const said = String(a.text || '').replace(/\s+/g, ' ').slice(0, 140);
+    let said = String(a.text || '').replace(/\s+/g, ' ').slice(0, 140);
+    const q = l.pending && l.pending.kind === 'ask' && l.pending.questions[0];
+    if (q) said = `${q.question.slice(0, 140)}\n${(q.options || []).map((o, i) => `${i + 1}) ${o.label}`).join('\n')}`;
+    else if (l.pending) said = l.pending.kind === 'plan' ? 'approve this plan? (yes / or say what to change)' : `ok to ${l.pending.summary}? (yes / no)`;
     try {
       await imsg.send(`${imsg.TAG} #${n} ${titleOf(l.sessionId)} ${asking ? 'asks' : 'is done'}: ${said}\n(reply here, or "#${n} …")`);
       imsg.saveConfig({ last: l.sessionId });
@@ -250,6 +253,12 @@ function liveInfo(live, meta, state) {
     info.inHub = true;
     if (live.error) info.error = live.error;
     if (!info.activity || live.status === 'busy') info.activity = { kind: 'say', text: live.activity };
+    if (live.pending) {
+      info.pending = live.pending;
+      const q = live.pending.questions && live.pending.questions[0];
+      info.activity = { ...(info.activity || {}), kind: 'tool', tool: live.pending.tool, asking: true,
+        text: q ? q.question : live.pending.kind === 'plan' ? 'has a plan for you' : `wants to ${live.pending.summary}` };
+    }
   }
   return info;
 }
@@ -677,6 +686,13 @@ async function handleApi(req, res, url) {
     const images = cleanImages(b.images);
     if (!UUID.test(b.id || '') || (!text && !images.length)) return send(res, 400, { error: 'empty message' });
     try { hub.send(b.id, text, images); return send(res, 200, { ok: true }); } catch (e) { return send(res, 409, { error: e.message }); }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/chat/answer') {
+    const b = await readBody(req);
+    if (!UUID.test(b.id || '')) return send(res, 400, { error: 'bad id' });
+    const answers = b.answers && typeof b.answers === 'object' ? b.answers : null;
+    try { hub.answer(b.id, { answers, allow: !!b.allow, message: b.message }); return send(res, 200, { ok: true }); } catch (e) { return send(res, 409, { error: e.message }); }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {

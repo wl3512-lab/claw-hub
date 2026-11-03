@@ -266,7 +266,102 @@ function renderHead(c) {
   renderComposer(c);
 }
 
+// ---------- questions from hub crabs: multiple choice, plans, permissions ----------
+// picks are kept per request (by its time) so a refresh doesn't lose half-picked answers
+function askKey(p) { return `${ui.sel}:${p.at}`; }
+function askPicks(p) {
+  if (!ui.ask || ui.ask.key !== askKey(p)) ui.ask = { key: askKey(p), picks: {} };
+  return ui.ask.picks;
+}
+function askDone(p) {
+  const picks = askPicks(p);
+  return p.questions.every((q, i) => picks[i] && (q.multiSelect ? picks[i].length : true));
+}
+function renderAsk(c) {
+  const card = $('#askCard');
+  const p = c.live && c.live.inHub && c.live.pending;
+  card.classList.toggle('hidden', !p);
+  if (!p) { setHtml(card, ''); return; }
+  let html = '';
+  if (p.kind === 'ask') {
+    const picks = askPicks(p);
+    const quick = p.questions.length === 1 && !p.questions[0].multiSelect;
+    html = p.questions.map((q, i) => {
+      const on = (o) => (q.multiSelect ? (picks[i] || []).includes(o.label) : picks[i] === o.label);
+      return `<div class="q">
+        <div class="q-head">${esc((q.header || 'question').toLowerCase())}${q.multiSelect ? ' · pick any' : ''}</div>
+        <div class="q-text">${esc(q.question)}</div>
+        <div class="opts">${(q.options || []).map((o, j) => `<button type="button" class="opt ${on(o) ? 'on' : ''}" data-q="${i}" data-o="${j}">
+          <span class="k">${j + 1}</span><b>${esc(o.label)}</b>${o.description ? `<span class="d">${esc(o.description)}</span>` : ''}</button>`).join('')}</div>
+      </div>`;
+    }).join('');
+    html += `<div class="ask-foot"><span>${quick ? 'tap one, or press its number' : 'pick for each, then send'} · or type your own answer below</span>${quick ? '' : `<button type="button" class="btn primary" data-ask="send" ${askDone(p) ? '' : 'disabled'}>send answers</button>`}</div>`;
+  } else if (p.kind === 'plan') {
+    html = `<div class="q"><div class="q-head">plan · wants your ok</div><div class="plan-md">${md(p.plan)}</div></div>
+      <div class="ask-foot"><span>or type what to change below</span><button type="button" class="btn" data-ask="no">keep planning</button><button type="button" class="btn primary" data-ask="yes">approve</button></div>`;
+  } else {
+    html = `<div class="q"><div class="q-head">permission</div><div class="q-text">ok to ${esc(p.summary)}?</div></div>
+      <div class="ask-foot"><span>or type why not below</span><button type="button" class="btn" data-ask="no">deny</button><button type="button" class="btn primary" data-ask="yes">allow</button></div>`;
+  }
+  setHtml(card, html);
+}
+async function sendAsk(body) {
+  const c = cur(); if (!c || ui.sending) return;
+  ui.sending = true;
+  try {
+    await api('/api/chat/answer', { id: c.id, ...body });
+    c.live.pending = null; c.live.status = 'busy'; c.live.activity = { kind: 'say', text: 'thinking…' };
+    ui.ask = null;
+  } catch (e) { toast(e.message); }
+  ui.sending = false;
+  const now = cur(); if (now) renderComposer(now);
+  setTimeout(loadMsgs, 400);
+}
+function pickOpt(qi, oi) {
+  const c = cur(); const p = c && c.live && c.live.pending;
+  if (!p || p.kind !== 'ask' || !p.questions[qi]) return;
+  const q = p.questions[qi]; const o = (q.options || [])[oi]; if (!o) return;
+  const picks = askPicks(p);
+  if (q.multiSelect) {
+    const cur2 = picks[qi] || [];
+    picks[qi] = cur2.includes(o.label) ? cur2.filter((x) => x !== o.label) : [...cur2, o.label];
+  } else picks[qi] = o.label;
+  if (p.questions.length === 1 && !q.multiSelect) return submitPicks(p);
+  renderAsk(c);
+}
+function submitPicks(p) {
+  const picks = askPicks(p);
+  const answers = {};
+  p.questions.forEach((q, i) => { answers[q.question] = q.multiSelect ? (picks[i] || []).join(', ') : picks[i]; });
+  return sendAsk({ answers });
+}
+$('#askCard').addEventListener('click', (e) => {
+  const o = e.target.closest('.opt');
+  if (o) return pickOpt(+o.dataset.q, +o.dataset.o);
+  const b = e.target.closest('[data-ask]');
+  if (!b) return;
+  const c = cur(); const p = c && c.live && c.live.pending; if (!p) return;
+  if (b.dataset.ask === 'send') return submitPicks(p);
+  if (b.dataset.ask === 'yes') return sendAsk({ allow: true });
+  const txt = $('#sendText').value.trim();
+  if (b.dataset.ask === 'no' && !txt && p.kind === 'plan') { $('#sendText').focus(); toast('type what to change, then send'); return; }
+  sendAsk({ allow: false, message: txt || undefined }).then(() => { $('#sendText').value = ''; autosize($('#sendText')); });
+});
+// number keys pick options when you're not typing
+document.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '') || document.activeElement.isContentEditable) return;
+  const c = cur(); const p = c && c.live && c.live.inHub && c.live.pending;
+  if (!p || p.kind !== 'ask' || $('#askCard').classList.contains('hidden')) return;
+  const picks = askPicks(p);
+  let qi = p.questions.findIndex((q, i) => !picks[i]);
+  if (qi < 0) qi = p.questions.length - 1;
+  e.preventDefault();
+  pickOpt(qi, +e.key - 1);
+});
+
 function renderComposer(c) {
+  renderAsk(c);
   const live = c.live;
   const elsewhere = live && !live.inHub;
   const busy = live && live.inHub && live.status === 'busy';
@@ -280,7 +375,9 @@ function renderComposer(c) {
   ta.placeholder = live && live.inHub ? 'message claude…' : 'continue this chat here…';
   // claude reads new messages mid-turn and picks them up at its next step,
   // so a busy chat still takes messages (it used to lock the button for the whole turn)
-  $('#sendBtn').textContent = !(live && live.inHub) ? 'continue' : busy ? 'queue' : 'send';
+  const asked = live && live.inHub && live.pending;
+  ta.placeholder = asked ? (asked.kind === 'ask' ? 'or type your own answer…' : asked.kind === 'plan' ? 'what should change?' : 'why not?') : ta.placeholder;
+  $('#sendBtn').textContent = !(live && live.inHub) ? 'continue' : asked ? 'answer' : busy ? 'queue' : 'send';
   $('#sendBtn').title = busy ? 'claude is working. it reads this at its next step.' : '';
   $('#sendBtn').disabled = ui.sending;
 }
