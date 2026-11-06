@@ -15,6 +15,7 @@ const imsg = require('./lib/imessage');
 const purpose = require('./lib/purpose');
 const work = require('./lib/work');
 const limits = require('./lib/limits');
+const sessionPolicy = require('./lib/session-policy');
 const { writeJson } = require('./lib/write-json');
 
 // Node exits on any unhandled error. A background timer hiccup (a session file vanishing
@@ -262,6 +263,8 @@ function liveInfo(live, meta, state) {
         text: q ? q.question : live.pending.kind === 'plan' ? 'has a plan for you' : `wants to ${live.pending.summary}` };
     }
   }
+  info.cleanupEligible = !!meta && (!meta.bot || live.entrypoint === 'hub')
+    && sessionPolicy.canClose(live, t.activity(meta), t.helpers(meta, { since: live.startedAt || 0 }));
   return info;
 }
 
@@ -342,17 +345,44 @@ function handoffFrom(meta, st) {
   ].filter((x) => x !== '').join('\n');
 }
 
-async function stopSession(id) {
-  if (await hub.stop(id)) return;
-  const live = t.listLive().find((l) => l.sessionId === id);
-  if (!live) return;
-  try { process.kill(live.pid, 'SIGTERM'); } catch { return; }
+async function stopSession(id, guard) {
+  const live = (hub.has(id) ? hub.list() : t.listLive()).find((l) => l.sessionId === id);
+  if (!live) return false;
+  if (guard) {
+    const meta = t.findTranscript(id);
+    const minutes = [15, 30, 60].includes(guard.idleMinutes) ? guard.idleMinutes : 30;
+    if (guard.pid !== live.pid || guard.statusSince !== live.statusSince || !meta
+      || !sessionPolicy.canClose(live, t.activity(meta), t.helpers(meta, { since: live.startedAt || 0 }), Date.now(), minutes)) {
+      throw new Error('This session changed or is still needed. Refresh before tidying it.');
+    }
+  }
+  if (hub.has(id)) return hub.stop(id);
+  if (!live.verifiedProcess) throw new Error('This process could not be verified as Claude. Close it in its terminal.');
+  try { process.kill(live.pid, 'SIGTERM'); } catch (e) { if (e.code === 'ESRCH') return true; throw e; }
   for (let i = 0; i < 50; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    try { process.kill(live.pid, 0); } catch { return; }
+    try { process.kill(live.pid, 0); } catch { return true; }
   }
   throw new Error('It did not close in time. Close it by hand and try again.');
 }
+
+let cleaning = false;
+async function cleanupTick() {
+  const { idleMinutes } = sessionPolicy.config();
+  if (!idleMinutes || cleaning) return;
+  cleaning = true;
+  try {
+    for (const live of allLive()) {
+      if (sessionPolicy.config().idleMinutes !== idleMinutes) break;
+      const meta = t.findTranscript(live.sessionId);
+      if (!meta || (meta.bot && live.entrypoint !== 'hub')) continue;
+      if (!sessionPolicy.canClose(live, t.activity(meta), t.helpers(meta, { since: live.startedAt || 0 }), Date.now(), idleMinutes)) continue;
+      try { await stopSession(live.sessionId, { pid: live.pid, statusSince: live.statusSince, idleMinutes }); }
+      catch (e) { console.error('[claw-hub] cleanup', e.message); }
+    }
+  } finally { cleaning = false; }
+}
+setInterval(() => cleanupTick().catch((e) => console.error('[claw-hub] cleanup', e.message)), 30000);
 
 const merging = new Set(); // chat ids in a merge right now (a double click shouldn't merge twice)
 
@@ -415,7 +445,9 @@ async function handleApi(req, res, url) {
       const own = (state.convos[c.id] || {}).label;
       c.name = own || purpose.name(c.id) || c.title;
     }
-    try { purpose.refresh(open.map((c) => ({ id: c.id, title: c.title, cwd: c.cwd, firstPrompt: c.firstPrompt, lastPrompt: c.lastPrompt })), crabDetail); } catch (e) { console.error('[purpose] refresh failed:', e.message); }
+    if (sessionPolicy.config().aiSummaries) {
+      try { purpose.refresh(open.map((c) => ({ id: c.id, title: c.title, cwd: c.cwd, firstPrompt: c.firstPrompt, lastPrompt: c.lastPrompt })), crabDetail); } catch (e) { console.error('[purpose] refresh failed:', e.message); }
+    }
     // files, last-hour activity and output today for each open crab, plus files two crabs both edited
     const works = [];
     for (const c of open) {
@@ -438,7 +470,6 @@ async function handleApi(req, res, url) {
       live: liveInfo(l, null),
       pinned: false, archived: false, bot: false, empty: true,
     }));
-    limits.maybeProbe();
     return send(res, 200, { convos: orphanLive.concat(convos), groups: state.groups, overlaps, clashes, limits: limits.get(), now: Date.now() });
   }
 
@@ -561,10 +592,13 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/settings') {
     const c = imsg.config();
-    return send(res, 200, { imessage: { handle: c.handle, enabled: c.enabled, onAsk: c.onAsk, onDone: c.onDone, onlyAway: c.onlyAway }, canRead: imsg.canRead(), node: process.execPath });
+    return send(res, 200, { sessions: sessionPolicy.config(), imessage: { handle: c.handle, enabled: c.enabled, onAsk: c.onAsk, onDone: c.onDone, onlyAway: c.onlyAway }, canRead: imsg.canRead(), node: process.execPath });
   }
   if (req.method === 'POST' && url.pathname === '/api/settings') {
     const b = await readBody(req);
+    if ('sessions' in b) {
+      try { sessionPolicy.save(b.sessions); } catch (e) { return send(res, 400, { error: e.message }); }
+    }
     const i = b.imessage || {};
     const patch = {};
     if (typeof i.handle === 'string') patch.handle = i.handle.trim().slice(0, 120);
@@ -721,15 +755,10 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/stop') {
     const b = await readBody(req);
     if (!UUID.test(b.id || '')) return send(res, 400, { error: 'bad id' });
-    if (await hub.stop(b.id)) return send(res, 200, { ok: true });
-    const live = t.listLive().find((l) => l.sessionId === b.id);
-    if (!live) return send(res, 404, { error: 'It already stopped.' });
-    try { process.kill(live.pid, 'SIGTERM'); } catch (e) { return send(res, 500, { error: e.message }); }
-    for (let i = 0; i < 40; i++) {
-      await new Promise((r) => setTimeout(r, 100));
-      try { process.kill(live.pid, 0); } catch { return send(res, 200, { ok: true }); }
-    }
-    return send(res, 200, { ok: true, slow: true });
+    try {
+      const stopped = await stopSession(b.id, b.idleOnly ? b : null);
+      return send(res, stopped ? 200 : 404, stopped ? { ok: true } : { error: 'It already stopped.' });
+    } catch (e) { return send(res, 409, { error: e.message }); }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/resume') {

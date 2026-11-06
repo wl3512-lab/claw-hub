@@ -151,6 +151,14 @@
 
 <dialog id="setDlg">
   <form method="dialog" id="setForm">
+    <h2>session cleanup</h2>
+    <p class="dlg-hint">keep using your terminal. claw hub can close completed Claude sessions you leave open; their chats stay saved for later.</p>
+    <label class="dlg-lbl">auto-close completed sessions after
+      <select id="idleMinutes"><option value="0">off — close them myself</option><option value="15">15 minutes idle</option><option value="30">30 minutes idle</option><option value="60">1 hour idle</option></select>
+    </label>
+    <p class="dlg-hint">working sessions, questions, unfinished helpers and editor or phone sessions stay open. closing Claude returns you to your terminal shell.</p>
+    <label class="check"><input type="checkbox" id="aiSummaries"> generate AI nicknames and overlap suggestions (uses Claude credits)</label>
+    <p class="dlg-hint">monitoring is passive by default. usage readings update from your hub chats; checking the meter never starts an AI call.</p>
     <h2>imessage pings</h2>
     <p class="dlg-hint">crabs text you when they finish or ask you something. reply in that thread to answer the last crab, or start with #number to pick one.</p>
     <label class="dlg-lbl">your iMessage phone number or Apple ID email

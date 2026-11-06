@@ -61,7 +61,7 @@ function renderCrew(list, now) {
   const sleepy = tidyList(list, now);
   ui.outTotal = total;
   const html = `<h2>crew <span>${list.length} · who's doing what</span>
-      ${sleepy.length ? `<button class="btn tidy" id="tidyUp" title="close crabs asleep over a day (they stay saved)">tidy up ${sleepy.length}</button>` : ''}</h2>${limitHtml(ui.limits)}` + rows.map(({ c, st }) => {
+      ${sleepy.length ? `<button class="btn tidy" id="tidyUp" title="close completed sessions idle for 30+ minutes; chats stay saved">tidy up ${sleepy.length}</button>` : ''}</h2>${limitHtml(ui.limits)}` + rows.map(({ c, st }) => {
     const s = crewStatus(c, st, now);
     const g = groupById(c.group);
     const where = c.live.parked ? '' : whereLabel(c.live);
@@ -123,18 +123,17 @@ function filesHtml(c) {
   const shown = fs.slice(0, 4).map((f) => `<span class="${clash.has(f.path) ? 'clash' : ''}" title="${esc(shortPath(f.path))}${clash.has(f.path) ? ' · another crab edited this too' : ''}">${esc(base(f.path))}</span>`).join('');
   return `<span class="crew-files">✎ ${shown}${fs.length > 4 ? `<em>+${fs.length - 4}</em>` : ''}</span>`;
 }
-// crabs with a process that have been asleep over a day (not asking, not working)
+// Eligibility comes from the server and is rechecked before each stop.
 function tidyList(list, now) {
-  return list.filter((c) => c.live && !c.live.parked && c.live.status !== 'busy' && !(c.live.activity || {}).asking
-    && c.live.statusSince && now - c.live.statusSince > 86400000);
+  return list.filter((c) => c.live && c.live.cleanupEligible);
 }
 async function tidyUp() {
   const list = tidyList(liveOnes(), Date.now());
   if (!list.length) return;
   const names = list.map((c) => `· ${c.name || c.title}`).join('\n');
-  if (!confirm(`close ${list.length} crab${list.length > 1 ? 's' : ''} asleep for over a day?\n\n${names}\n\nthey stay saved. you can continue any of them later.`)) return;
+  if (!confirm(`close ${list.length} completed session${list.length > 1 ? 's' : ''} idle for 30+ minutes?\n\n${names}\n\nthe chats stay saved. you can continue any of them later.`)) return;
   let n = 0;
-  for (const c of list) { try { await api('/api/stop', { id: c.id }); n++; } catch (e) { toast(`${c.name || c.title}: ${e.message}`); } }
+  for (const c of list) { try { await api('/api/stop', { id: c.id, idleOnly: true, pid: c.live.pid, statusSince: c.live.statusSince }); n++; } catch (e) { toast(`${c.name || c.title}: ${e.message}`); } }
   toast(`closed ${n}. all still saved.`);
   setTimeout(refresh, 600);
 }
