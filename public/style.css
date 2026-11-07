@@ -127,11 +127,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
   box-shadow: 0 0 0 var(--s,4px) #4a3670; }
 .crab.z-desk .spr { margin-left: calc(var(--s,4px) * -16); }
 .crab.z-desk .fxs { margin-left: calc(var(--s,4px) * -6); }
-.crab.baby .spr svg { width: calc(var(--s,4px) * 12); height: calc(var(--s,4px) * 10); }
-.crab.baby .tag { font-size: 9px; background: rgba(42,33,56,.9); color: var(--lav); padding: 0 4px; margin-top: 1px; }
 .crab.baby.s-stuck .tag { color: var(--red); }
 .crab.baby.s-done .tag { color: var(--green); }
-.crab.baby .fxs { bottom: calc(100% - var(--s,4px) * 1); }
 .crab.hatch { animation: hatch .5s steps(5) both; }
 @keyframes hatch { 0% { transform: translate(-50%, -100%) scale(0); } 60% { transform: translate(-50%, -100%) scale(1.25); } 100% { transform: translate(-50%, -100%) scale(1); } }
 .crab.home { animation: home .6s steps(4) both; }
@@ -520,3 +517,54 @@ dialog textarea { resize: vertical; }
 .lim-five { margin-left: auto; }
 .lim-five.hot { color: var(--pink); }
 .crew-share { font: 10.5px var(--mono); color: var(--faint); white-space: nowrap; margin-left: auto; }
+
+/* ---- babies: a small row under their mom, the full list in the chat ---- */
+/* beside the shell, in the gap between crabs: it takes no room, so nothing gets pushed around, and it clears the desks */
+.brood { position: absolute; left: calc(50% + var(--s, 4px) * 13); top: 0; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.brood:empty { display: none; }
+.bb { position: relative; display: inline-block; line-height: 0; cursor: pointer; }
+.bb svg { width: 24px; height: 20px; display: block; }
+.bb:hover svg { transform: translateY(-2px); }
+.bb.fresh { animation: bb-pop .35s steps(3) both; }
+@keyframes bb-pop { from { transform: scale(.2); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.bb.s-stuck svg { transform: rotate(180deg); }
+.bb.s-stuck::after, .bb.s-done::after { position: absolute; top: -2px; right: -2px; width: 9px; height: 9px; border-radius: 50%; font: 700 8px/9px var(--mono); text-align: center; color: #1a0b16; }
+.bb.s-stuck::after { content: "!"; background: var(--red); }
+.bb.s-done::after { content: ""; background: var(--green); }
+.bb-more { font: 700 10px var(--mono); color: var(--lav); padding: 0 2px; }
+.mapcrab { position: relative; }
+.mpip { position: absolute; top: -4px; right: -6px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--lav); color: #1a0b16; font: 700 9px/14px var(--mono); text-align: center; }
+.mpip.s-stuck { background: var(--red); }
+.mpip.s-done { background: var(--green); }
+.crew-brood { display: flex; align-items: center; gap: 3px; margin-top: 3px; min-width: 0; }
+.crew-brood em { font: 11px var(--mono); font-style: normal; color: var(--dim); margin-left: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.tray { flex: none; margin: 10px max(28px, calc(50% - 400px)) 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); overflow: hidden; }
+.tray.hidden { display: none; }
+.tray-head { display: flex; align-items: center; gap: 8px; padding: 2px 8px 2px 2px; }
+.tray-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px; background: none; border: 0; color: var(--ink); font: 700 12px var(--mono); text-align: left; cursor: pointer; }
+.tray-arrow { color: var(--lav); }
+.tray-read { flex: none; font-size: 11px; }
+.tray-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1px; max-height: 176px; overflow: auto; background: var(--line); border-top: 1px solid var(--line); }
+.tray-list.hidden { display: none; }
+.tray-baby { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 10px; background: var(--bg-2); border: 0; color: var(--ink); text-align: left; cursor: pointer; }
+.tray-baby:hover, .tray-baby:focus-visible, .tray-baby.on { background: var(--bg-3); outline: none; }
+.tray-crab { line-height: 0; }
+.tray-crab svg { width: 28px; height: auto; }
+.tray-baby.s-stuck .tray-crab svg { transform: rotate(180deg); }
+.tray-main { min-width: 0; display: flex; flex-direction: column; }
+.tray-main b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tray-now { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tray-st { font: 10px var(--mono); color: var(--lav); }
+.tray-baby.s-done .tray-st { color: var(--green); }
+.tray-baby.s-stuck .tray-st { color: var(--red); }
+.tray-baby.s-stopped .tray-st { color: var(--faint); }
+.tray-baby.unread b::before { content: "● "; color: var(--green); }
+.tray-view { max-height: 38vh; overflow: auto; padding: 8px 14px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.tray-view.hidden { display: none; }
+.tray-view-head { display: flex; align-items: center; justify-content: space-between; font: 11px var(--mono); color: var(--faint); }
+@media (prefers-reduced-motion: reduce) { .bb.fresh { animation: none; } }
+@media (max-width: 640px) { .tray { margin: 8px 12px 0; } .tray-list { grid-template-columns: 1fr; } }
+.crab.z-desk .brood { margin-left: calc(var(--s, 4px) * -8); }
+.crab:has(.brood:hover) .say { opacity: 0; } /* the baby's card is showing, not mom's bubble */
+.tray-view-head { position: sticky; top: -8px; z-index: 1; padding: 6px 0; background: var(--bg-2); }

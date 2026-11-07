@@ -103,13 +103,16 @@
     card.className = 'crab-card hidden';
     card.setAttribute('role', 'tooltip');
     document.body.appendChild(card);
-    const crabEl = (t) => t.closest && (t.closest('.mapcrab') || t.closest('.crab:not(.baby)'));
+    const crabEl = (t) => t.closest && (t.closest('[data-sub]') || t.closest('.mapcrab') || t.closest('.crab'));
     const show = (e) => {
       const t = crabEl(e.target);
       if (!t || !last) return;
-      const conv = last[0].find((c) => c.id === t.dataset.id);
+      const [sid, aid] = (t.dataset.sub || '').split('/');
+      const conv = last[0].find((c) => c.id === (sid || t.dataset.id));
       if (!conv) return;
-      card.innerHTML = cardHtml(conv, last[1]);
+      const baby = aid && (conv.live.helpers || []).find((h) => h.id === aid);
+      if (aid && !baby) return;
+      card.innerHTML = baby ? babyCardHtml(conv, baby, last[1]) : cardHtml(conv, last[1]);
       card.classList.remove('hidden');
       const r = t.getBoundingClientRect();
       const w = card.offsetWidth, h = card.offsetHeight;
@@ -124,6 +127,13 @@
     el.addEventListener('focusin', show);
     el.addEventListener('focusout', () => card.classList.add('hidden'));
     el.addEventListener('click', () => card.classList.add('hidden'));
+    // the crew list shows the same babies, with the same quick view
+    const crew = document.getElementById('crew');
+    if (crew) {
+      crew.addEventListener('mouseover', show);
+      crew.addEventListener('mouseout', hide);
+      crew.addEventListener('click', () => card.classList.add('hidden'));
+    }
     window.addEventListener('resize', () => { penEl._propsKey = ''; if (last) render(...last); for (const c of crabs.values()) place(c); });
   }
 
@@ -133,8 +143,6 @@
     // leaving or switching: crabs on screen go away, the new room's crabs walk in from the door
     for (const c of crabs.values()) c.el.remove();
     crabs.clear();
-    for (const b of babies.values()) b.el.remove();
-    babies.clear();
     penEl._propsKey = '';
     if (last) render(...last);
   }
@@ -217,10 +225,17 @@
     return `<b class="cc-title">${escHtml(nameOf(conv))}</b>${nameOf(conv) !== conv.title ? `<span class="cc-sub">${escHtml(short(conv.title, 60))}</span>` : ''}
       <p class="cc-for"><i>for</i>${what}</p>
       <p class="cc-now"><i>now</i>${escHtml(sayFor(conv, st))}</p>
+      ${(l.helpers || []).length ? `<p class="cc-now"><i>kids</i>${escHtml(broodWords(l.helpers))}</p>` : ''}
       <p class="cc-meta">${escHtml(short(conv.cwd || '', 40))}${where ? ` · ${escHtml(where)}` : ''}</p>${twins}`;
   }
 
   // ---------- the map (top view) ----------
+  function mapPip(conv) {
+    const kids = conv.live.helpers || [];
+    if (!kids.length) return '';
+    const worst = kids.some((h) => h.status === 'stuck') ? 'stuck' : kids.some((h) => h.status === 'done') ? 'done' : 'run';
+    return `<span class="mpip s-${worst}">${kids.length}</span>`;
+  }
   const MAX_ICONS = 12;
   function renderMap(zones) {
     const S = scale();
@@ -232,7 +247,7 @@
         const l = lookFor(conv);
         const busy = conv.live.status === 'busy' && !conv.live.parked;
         const nm = nameOf(conv);
-        return `<button class="mapcrab${busy ? ' busy' : ''}" data-id="${conv.id}" aria-label="${escHtml(nm)}">${topCritter(l.hue, S * 9, l.shell)}<span class="mlabel" style="--hue:${l.hue}">${escHtml(nm.length > 24 ? nm.slice(0, 23) + '…' : nm)}</span></button>`;
+        return `<button class="mapcrab${busy ? ' busy' : ''}" data-id="${conv.id}" aria-label="${escHtml(nm)}">${topCritter(l.hue, S * 9, l.shell)}${mapPip(conv)}<span class="mlabel" style="--hue:${l.hue}">${escHtml(nm.length > 24 ? nm.slice(0, 23) + '…' : nm)}</span></button>`;
       }).join('') + (list.length > MAX_ICONS ? `<span class="more-crabs">+${list.length - MAX_ICONS}</span>` : '');
       return `<div class="mroom r-${r.id}${list.length ? '' : ' empty'}" data-room="${r.id}" role="button" tabindex="0" aria-label="${r.name}: ${list.length} crabs"
           style="left:${x0}%;top:${y0}%;width:${x1 - x0}%;height:${y1 - y0}%">
@@ -254,7 +269,7 @@
     for (const conv of live) { const st = stateOf(conv, now); states.set(conv.id, st); zones[st.zone].push(conv); }
     renderMap(zones);
     penEl.classList.toggle('in-room', !!room);
-    if (!room) { for (const c of crabs.values()) c.el.remove(); crabs.clear(); for (const b of babies.values()) b.el.remove(); babies.clear(); return; }
+    if (!room) { for (const c of crabs.values()) c.el.remove(); crabs.clear(); return; }
 
     const here = zones[room];
     const r = roomById(room);
@@ -275,7 +290,7 @@
         const el = document.createElement('button');
         el.className = 'crab';
         el.dataset.id = conv.id;
-        el.innerHTML = '<span class="say"></span><span class="fxs"></span><span class="spr"></span><span class="tag"></span><span class="job"></span>';
+        el.innerHTML = '<span class="say"></span><span class="fxs"></span><span class="spr"></span><span class="brood"></span><span class="tag"></span><span class="job"></span>';
         container.appendChild(el);
         c = { el, x: 50, y: 99, zone: null, pose: null, facing: 1, movingUntil: 0, key: '' };
         crabs.set(conv.id, c);
@@ -296,7 +311,9 @@
       }
       const moving = Date.now() < c.movingUntil;
       const pose = moving ? 'walk' : st.pose;
-      const key = `${pose}|${st.fx}|${st.pct}|${nameOf(conv)}|${conv.purpose}|${c.facing}|${conv.hue}|${conv.shell}`;
+      const kids = conv.live.helpers || [];
+      setBrood(c.el.querySelector('.brood'), conv);
+      const key = `${pose}|${st.fx}|${st.pct}|${nameOf(conv)}|${conv.purpose}|${c.facing}|${conv.hue}|${conv.shell}|${kids.length}`;
       if (key !== c.key) {
         c.key = key;
         c.el.className = `crab z-${c.zone} p-${st.pose}${moving ? ' moving' : ''}`;
@@ -307,7 +324,7 @@
         c.el.querySelector('.tag').textContent = nm.length > 22 ? nm.slice(0, 21) + '…' : nm;
         c.el.querySelector('.job').textContent = conv.purpose ? short(conv.purpose, 70) : '';
         c.el.removeAttribute('title');
-        c.el.setAttribute('aria-label', `${nameOf(conv)}: ${say}`);
+        c.el.setAttribute('aria-label', `${nameOf(conv)}: ${say}${kids.length ? `. ${broodWords(kids)}` : ''}`);
       }
     });
     // crabs that moved to another place walk out the door
@@ -317,94 +334,63 @@
       c.onArrive = () => { c.el.remove(); crabs.delete(id); };
       walkTo(c, 50, 104);
     }
-    renderBabies(live.filter((conv) => seen.has(conv.id)));
   }
 
   // ---------- baby crabs (subagents) ----------
-  const babies = new Map(); // "sid/agent-x" -> { el, x, y, status, ... }
-  const wentHome = new Set();
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  // they ride in one small row under their mom instead of walking around the room:
+  // what needs you (stuck, then finished) stays in view, the rest is a count.
+  // each chat has the full list in its own container (renderTray in app.js)
+  const BROOD_MAX = 3;
+  const BABY_ORDER = { stuck: 0, done: 1, run: 2 };
+  const BABY_WORD = { run: 'working', stuck: 'stuck', done: 'done', stopped: 'stopped' };
+  const hatched = new Set();
 
   function babyPose(h) {
     if (h.status === 'stuck') return 'tired';
-    if (h.status === 'done') return 'ask'; // waving its scroll until you open it
+    if (h.status === 'done') return 'ask'; // holding up its work until you open it
     if (h.tool && READ_TOOLS.test(h.tool)) return 'read';
     if (h.tool) return 'type';
     return 'think';
   }
-  // babies near their mother sit on a half ring below her, each in its own spot
-  function babyTarget(h, mom, i = 0, n = 1) {
-    if (room === 'library' && h.status !== 'stuck' && h.tool && READ_TOOLS.test(h.tool)) return [rand(10, 90), rand(40, 54)];
-    const ang = Math.PI * (n === 1 ? 0.5 : 0.08 + 0.84 * (i / (n - 1)));
-    return [clamp(mom.x - Math.cos(ang) * 15 + rand(-1, 1), 5, 95), clamp(mom.y + Math.sin(ang) * 13 + 3, 14, 97)];
+  function broodWords(list) {
+    const n = (k) => list.filter((h) => h.status === k).length;
+    const bits = ['run', 'stuck', 'done', 'stopped'].filter(n).map((k) => `${n(k)} ${BABY_WORD[k]}`);
+    return `${list.length} ${list.length === 1 ? 'baby' : 'babies'}: ${bits.join(' · ')}`;
   }
-  function ringIndex(conv, h) {
-    const near = (conv.live.helpers || []).filter((x) => x.status === 'done' || x.status === 'stuck' || !(x.tool && READ_TOOLS.test(x.tool)));
-    return [Math.max(0, near.findIndex((x) => x.id === h.id)), Math.max(1, near.length)];
+  // what a baby is up to right now, in a few words. all of it comes from its transcript, no tokens
+  function babyNow(h) {
+    if (h.orphan) return 'stopped: its crab closed. wake the crab to retry';
+    if (h.status === 'stuck') return h.tool ? `quiet for minutes, last ${VERBS[h.tool] || h.tool.toLowerCase()} ${short(base(h.now || ''))}`.trim() : 'quiet for minutes';
+    if (h.status === 'done') return 'finished. open it to see what it found';
+    if (h.status === 'stopped') return 'stopped before it finished';
+    return h.tool ? `${VERBS[h.tool] || h.tool.toLowerCase()} ${short(base(h.now || ''))}`.trim() : 'thinking…';
   }
-  function babyDraw(b) {
-    const pose = Date.now() < b.movingUntil ? 'walk' : babyPose(b.h);
-    const key = `${pose}|${b.h.status}|${b.facing}`;
-    if (key === b.key) return;
-    b.key = key;
-    b.el.className = `crab baby s-${b.h.status}${Date.now() < b.movingUntil ? ' moving' : ''}${b.hatching ? ' hatch' : ''}`;
-    const spr = b.el.querySelector('.spr');
-    spr.innerHTML = pixelCritter(pose, b.hue, 48, false, b.shell);
-    spr.style.transform = b.h.status === 'stuck' ? 'rotate(180deg)' : b.facing < 0 ? 'scaleX(-1)' : '';
-    b.el.querySelector('.fxs').innerHTML = b.h.status === 'stuck' ? '<span class="fx q bad">!</span>' : b.h.status === 'done' ? '<span class="fx scroll"></span>' : '';
+  function broodHtml(conv, { pop = false } = {}) {
+    const list = [...(conv.live.helpers || [])].sort((a, b) => BABY_ORDER[a.status] - BABY_ORDER[b.status]);
+    if (!list.length) return '';
+    const l = lookFor(conv);
+    const bits = list.slice(0, BROOD_MAX).map((h) => {
+      const key = `${conv.id}/${h.id}`;
+      const fresh = pop && !hatched.has(key);
+      if (pop) hatched.add(key);
+      return `<span class="bb s-${h.status}${fresh ? ' fresh' : ''}" data-sub="${key}">${pixelCritter(babyPose(h), l.hue, 24, h.status !== 'run', l.shell)}</span>`;
+    }).join('');
+    const more = list.length - BROOD_MAX;
+    return bits + (more > 0 ? `<span class="bb-more" title="${escHtml(broodWords(list))}">+${more}</span>` : '');
   }
-
-  function renderBabies(live) {
-    const seen = new Set();
-    const container = penEl.querySelector('.crabs');
-    for (const conv of live) {
-      const mom = crabs.get(conv.id);
-      if (!mom) continue;
-      for (const h of conv.live.helpers || []) {
-        const key = `${conv.id}/${h.id}`;
-        if (wentHome.has(key)) continue;
-        seen.add(key);
-        let b = babies.get(key);
-        if (!b) {
-          const el = document.createElement('button');
-          el.className = 'crab baby hatch';
-          el.dataset.sub = key;
-          el.innerHTML = '<span class="say"></span><span class="fxs"></span><span class="spr"></span><span class="tag"></span><span class="job"></span>';
-          el.querySelector('.tag').textContent = h.description.length > 22 ? h.description.slice(0, 21) + '…' : h.description;
-          container.appendChild(el);
-          b = { el, x: mom.x, y: mom.y, facing: 1, movingUntil: 0, key: '', hue: lookFor(conv).hue, shell: lookFor(conv).shell, h, conv, hatching: true };
-          babies.set(key, b);
-          place(b);
-          b.el.style.zIndex = String(Math.round(mom.y) + 2);
-          babyDraw(b);
-          setTimeout(() => { b.hatching = false; const [x, y] = babyTarget(b.h, mom, ...ringIndex(b.conv, b.h)); walkTo(b, x, y); }, 500);
-        }
-        const was = b.h.status;
-        const ring = ringIndex(conv, h);
-        const ringChanged = b.ring && (b.ring[0] !== ring[0] || b.ring[1] !== ring[1]);
-        b.h = h; b.conv = conv; b.ring = ring;
-        const lk = lookFor(conv);
-        if (lk.hue !== b.hue || lk.shell !== b.shell) { b.hue = lk.hue; b.shell = lk.shell; b.key = ''; }
-        const bsay = h.orphan ? `stopped: ${short(h.description, 36)}. my crab closed, wake it to retry`
-          : h.status === 'stuck' ? `stuck on: ${short(h.description, 40)}. help?` : h.status === 'done' ? 'done! tap me to see what I found' : `${h.tool ? (VERBS[h.tool] || h.tool.toLowerCase()) : 'working on'} · ${short(h.description, 36)}`;
-        const bs = b.el.querySelector('.say');
-        if (bs.textContent !== bsay) bs.textContent = bsay;
-        b.onArrive = () => babyDraw(b);
-        if ((h.status !== was || ringChanged) && !b.hatching) { const [x, y] = babyTarget(h, mom, ...ring); walkTo(b, x, y); }
-        babyDraw(b);
-      }
-    }
-    for (const [key, b] of babies) {
-      if (seen.has(key) || b.leaving) continue;
-      const mom = crabs.get(b.conv.id);
-      if (b.h.status === 'done' && mom) {
-        // you opened it: walk the finished work home to its mom, then go
-        b.leaving = true;
-        b.say = b.el.querySelector('.say'); b.say.textContent = 'bringing it home';
-        b.onArrive = () => { b.el.classList.add('home'); setTimeout(() => { b.el.remove(); babies.delete(key); wentHome.add(key); }, 700); };
-        walkTo(b, mom.x, mom.y);
-      } else { b.el.remove(); babies.delete(key); }
-    }
+  function setBrood(el, conv) {
+    const sig = (conv.live.helpers || []).map((h) => `${h.id}|${h.status}|${h.tool}`).join(',');
+    if (el._sig === sig) return;
+    el._sig = sig;
+    el.innerHTML = broodHtml(conv, { pop: true });
+  }
+  function babyCardHtml(conv, h, now) {
+    const mins = h.startedAt ? Math.max(1, Math.round((now - h.startedAt) / 60000)) : 0;
+    const when = !mins ? '' : `started ${mins < 60 ? `${mins} min` : mins < 1440 ? `${Math.round(mins / 60)}h` : `${Math.round(mins / 1440)}d`} ago`;
+    return `<b class="cc-title">${escHtml(h.description)}</b>
+      <span class="cc-sub">baby of ${escHtml(nameOf(conv))} · ${escHtml(h.type || 'subagent')}${when ? ` · ${when}` : ''}</span>
+      <p class="cc-for"><i>now</i>${escHtml(babyNow(h))}</p>
+      ${h.said ? `<p class="cc-now"><i>said</i>"${escHtml(short(h.said, 200))}"</p>` : ''}`;
   }
 
   function rand(a, b) { return a + Math.random() * (b - a); }
@@ -430,7 +416,6 @@
     c.movingUntil = Date.now() + ms;
     c.key = '';
     place(c);
-    if (c.h) babyDraw(c);
     clearTimeout(c.stopT);
     c.stopT = setTimeout(() => { c.key = ''; if (c.onArrive) c.onArrive(); else if (c.conv) refreshOne(c); }, ms + 30);
   }
@@ -455,11 +440,6 @@
       if (c.st && c.st.pose !== 'idle') continue;
       if (Math.random() < 0.4) { const [x, y] = freeSpot(c); walkTo(c, x, y); }
     }
-    for (const b of babies.values()) {
-      if (b.hatching || b.h.status !== 'run' || Date.now() < b.movingUntil || Math.random() > 0.15) continue;
-      const mom = [...crabs.values()].find((c) => c.conv && b.el.dataset.sub.startsWith(c.conv.id));
-      if (mom && b.h.tool && READ_TOOLS.test(b.h.tool)) { const [x, y] = babyTarget(b.h, mom); walkTo(b, x, y); }
-    }
   }, 2600);
 
   // ---------- tips ----------
@@ -482,12 +462,13 @@
     }
     const sleepy = convos.filter((c) => c.live.status !== 'busy' && now - (c.live.statusSince || now) > 2 * 3600 * 1000);
     for (const c of sleepy.slice(0, 2)) out.push({ kind: 'old', id: c.id, text: `${nameOf(c)} has waited ${Math.round((now - c.live.statusSince) / 3600000)}h. close it if you're done.`, actions: ['close'] });
-    for (const c of convos) for (const h of c.live.helpers || []) {
-      if (h.status === 'stuck') out.push({ kind: 'full', id: c.id, text: `a baby of ${nameOf(c)} ("${h.description}") has gone quiet for minutes. check on it.`, actions: ['open'] });
+    for (const c of convos) {
+      const stuck = (c.live.helpers || []).filter((h) => h.status === 'stuck');
+      if (stuck.length) out.push({ kind: 'full', id: c.id, text: `${stuck.length === 1 ? `a baby of ${nameOf(c)} ("${stuck[0].description}") has` : `${stuck.length} babies of ${nameOf(c)} have`} gone quiet for minutes. check on it.`, actions: ['open'] });
     }
     if (convos.length >= 6) out.push({ kind: 'many', text: `${convos.length} sessions open. sleeping ones still use memory, close a few.` });
     return out.slice(0, 5);
   }
 
-  window.Pen = { buildPen, render, tips, stateOf, sayFor, nameOf, overlaps: [] };
+  window.Pen = { buildPen, render, tips, stateOf, sayFor, nameOf, broodHtml, broodWords, babyNow, babyPose, BABY_WORD, overlaps: [] };
 })();

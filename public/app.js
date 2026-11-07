@@ -72,6 +72,7 @@ function renderCrew(list, now) {
         <span class="crew-top"><b>${esc(window.Pen.nameOf(c))}</b><span class="crew-st ${s.cls}">${esc(s.text)}</span>${weekShare(c) ? `<span class="crew-share" title="its rough share of your weekly limit today">${weekShare(c)}% of week</span>` : ''}</span>
         <span class="crew-job">${job}</span>
         ${filesHtml(c)}
+        ${(c.live.helpers || []).length ? `<span class="crew-brood">${window.Pen.broodHtml(c)}<em>${esc(window.Pen.broodWords(c.live.helpers))}</em></span>` : ''}
       </span>
       <span class="crew-where">${g ? `▸ ${esc(g.name)}` : esc(folderName(c.cwd).replace(/^~$/, 'home'))}${where ? `<br>${esc(where)}` : ''}
         ${stripHtml(c)}</span>
@@ -139,6 +140,7 @@ async function tidyUp() {
 }
 $('#crew').addEventListener('click', (e) => {
   if (e.target.closest('#tidyUp')) { tidyUp(); return; }
+  if (e.target.closest('[data-sub]')) return; // a baby: the page-wide click opens it in its mom's chat
   const r = e.target.closest('.crew-row'); if (r) openConvo(r.dataset.id);
 });
 
@@ -505,14 +507,13 @@ function toolGroupHtml(tools) {
   </details>`;
 }
 
-function renderMsgs(data) {
-  const box = $('#msgs');
-  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
-  let html = data.start > 0 ? `<button class="btn more-msgs" id="loadMore">show earlier</button>` : '';
+// a run of transcript items as html, for a chat and for a baby's view in the tray
+function itemsHtml(items) {
+  let html = '';
   let tools = [];
   let lastTs = 0;
   const flush = () => { if (tools.length) { html += toolGroupHtml(tools); tools = []; } };
-  for (const it of data.items) {
+  for (const it of items) {
     if (it.ts && it.ts - lastTs > 30 * 60 * 1000) {
       flush();
       html += `<div class="time">${new Date(it.ts).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).toLowerCase()}</div>`;
@@ -526,6 +527,13 @@ function renderMsgs(data) {
     else if (it.kind === 'note') html += `<div class="msg note-line">— ${esc(it.text.toLowerCase())} —</div>`;
   }
   flush();
+  return html;
+}
+
+function renderMsgs(data) {
+  const box = $('#msgs');
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
+  let html = (data.start > 0 ? `<button class="btn more-msgs" id="loadMore">show earlier</button>` : '') + itemsHtml(data.items);
   if (!data.items.length) html = '<div class="msg note-line">starting up…</div>';
   if (box._html === html) return;
   const openIdx = [...box.querySelectorAll('details.tools')].map((d, i) => (d.open ? i : -1)).filter((i) => i >= 0);
@@ -538,18 +546,118 @@ function renderMsgs(data) {
   if (more) more.onclick = () => { ui.limit += 500; loadMsgs(); };
 }
 
+// ---------- a chat's babies, in their own container above the messages ----------
+const TRAY_RANK = { run: 0, stuck: 0, done: 1, stopped: 2 };
+function trayOpenPref(id) { try { return JSON.parse(localStorage.getItem('clawhub.tray') || '{}')[id]; } catch { return undefined; } }
+function setTrayPref(id, on) {
+  try { const all = JSON.parse(localStorage.getItem('clawhub.tray') || '{}'); all[id] = on; localStorage.setItem('clawhub.tray', JSON.stringify(all)); } catch { /* fine */ }
+}
+function resetTray() {
+  ui.brood = []; ui.broodAt = 0; ui.trayBaby = null;
+  $('#broodTray').classList.add('hidden');
+  const v = $('#trayView'); v.classList.add('hidden'); v._html = ''; v.innerHTML = '';
+  $('#trayHead')._html = ''; $('#trayList')._html = '';
+}
+async function loadBrood(force) {
+  const id = ui.sel;
+  if (!id || ui.sub || (!force && Date.now() - (ui.broodAt || 0) < 4000)) return;
+  ui.broodAt = Date.now();
+  try {
+    const { babies } = await api(`/api/brood/${id}`);
+    if (ui.sel !== id || ui.sub) return;
+    ui.brood = babies;
+    renderTray();
+    if (ui.trayBaby) loadTrayBaby();
+  } catch { /* the next poll tries again */ }
+}
+function renderTray() {
+  const box = $('#broodTray');
+  const c = cur();
+  const list = ui.brood || [];
+  if (!c || !list.length || ui.sub) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  // a chat with no process left can't have babies still working
+  const running = !!(c.live || c.parked);
+  const seenAs = (h) => (!running && (h.status === 'run' || h.status === 'stuck') ? { ...h, status: 'stopped' } : h);
+  const shown = list.map(seenAs).sort((a, b) => (TRAY_RANK[a.status] - TRAY_RANK[b.status]) || (a.opened - b.opened) || (b.startedAt - a.startedAt));
+  const unread = shown.filter((h) => h.status === 'done' && !h.opened).length;
+  const needsYou = unread || shown.some((h) => h.status === 'run' || h.status === 'stuck');
+  const pref = trayOpenPref(c.id);
+  const open = pref === undefined ? !!needsYou : pref;
+  setHtml($('#trayHead'), `<button class="tray-toggle" id="trayToggle" aria-expanded="${open}"><span class="tray-arrow">${open ? '▾' : '▸'}</span>${esc(window.Pen.broodWords(shown))}</button>
+    ${unread ? `<button class="btn tray-read" id="trayRead">mark ${unread} read</button>` : ''}`);
+  const rows = $('#trayList');
+  rows.classList.toggle('hidden', !open);
+  $('#trayView').classList.toggle('hidden', !open || !ui.trayBaby);
+  if (!open) return;
+  setHtml(rows, shown.map((h) => {
+    const l = window.Critter.lookFor(c);
+    return `<button class="tray-baby s-${h.status}${h.id === ui.trayBaby ? ' on' : ''}${h.status === 'done' && !h.opened ? ' unread' : ''}" data-baby="${h.id}" aria-expanded="${h.id === ui.trayBaby}">
+      <span class="tray-crab">${pixelCritter(window.Pen.babyPose(h), l.hue, 28, true, l.shell)}</span>
+      <span class="tray-main"><b>${esc(h.description)}</b>
+        <span class="tray-now">${esc(h.status === 'done' && h.said ? h.said : window.Pen.babyNow(h))}</span></span>
+      <span class="tray-st">${esc(window.Pen.BABY_WORD[h.status])}</span>
+    </button>`;
+  }).join(''));
+}
+async function loadTrayBaby() {
+  const id = ui.sel, aid = ui.trayBaby;
+  if (!id || !aid) return;
+  const view = $('#trayView');
+  try {
+    const data = await api(`/api/sub/${id}/${aid}?limit=60`);
+    if (ui.sel !== id || ui.trayBaby !== aid) return;
+    const atEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80;
+    const first = !view._html;
+    setHtml(view, `<div class="tray-view-head"><span>its work, in its own words</span><button class="btn" id="trayFull">full view</button></div>${itemsHtml(data.items) || '<div class="msg note-line">starting up…</div>'}`);
+    if (first || atEnd) view.scrollTop = view.scrollHeight;
+  } catch (e) { setHtml(view, `<div class="msg note-line">couldn't read it: ${esc(e.message)}</div>`); }
+}
+function pickTrayBaby(aid) {
+  const view = $('#trayView');
+  ui.trayBaby = ui.trayBaby === aid ? null : aid;
+  view._html = ''; view.innerHTML = '';
+  if (ui.trayBaby) setTrayPref(ui.sel, true);
+  $('#trayList')._html = '';
+  renderTray();
+  if (ui.trayBaby) { loadTrayBaby().then(() => loadBrood(true)); }
+}
+$('#broodTray').addEventListener('click', async (e) => {
+  if (e.target.closest('#trayToggle')) {
+    setTrayPref(ui.sel, e.target.closest('#trayToggle').getAttribute('aria-expanded') !== 'true');
+    renderTray();
+    return;
+  }
+  if (e.target.closest('#trayRead')) {
+    try { await api('/api/brood/seen', { id: ui.sel }); await loadBrood(true); refresh(); } catch (err) { toast(err.message); }
+    return;
+  }
+  if (e.target.closest('#trayFull')) { openSub(`${ui.sel}/${ui.trayBaby}`); return; }
+  const b = e.target.closest('[data-baby]');
+  if (b) pickTrayBaby(b.dataset.baby);
+});
+// from the pen or the crew: the mom's chat, with that baby open in the tray
+function openBaby(key) {
+  const [sid, aid] = key.split('/');
+  openConvo(sid);
+  if (ui.sel !== sid) return;
+  setTrayPref(sid, true);
+  ui.trayBaby = aid;
+  loadBrood(true);
+}
+
 // read-only view of a baby crab's (subagent's) transcript
 function openSub(key) {
   const [sid, aid] = key.split('/');
   const mom = ui.convos.find((x) => x.id === sid);
   ui.sel = sid; ui.sub = aid; ui.limit = 250;
   show('chat');
-  const h = ((mom && ((mom.live && mom.live.helpers) || (mom.parked && mom.parked.helpers))) || []).find((x) => x.id === aid) || {};
+  const h = [...((mom && ((mom.live && mom.live.helpers) || (mom.parked && mom.parked.helpers))) || []), ...(ui.brood || [])].find((x) => x.id === aid) || {};
   setHtml($('#chatCritter'), crab(mom || { id: sid }, h.status === 'stuck' ? 'tired' : 'read', 30));
   $('#cTitle').textContent = h.description || 'baby crab';
   $('#cTitle').contentEditable = 'false';
   setHtml($('#cSub'), `baby of <b>${esc(mom ? mom.title : 'a session')}</b> · ${esc(h.type || 'subagent')} · ${esc(h.status === 'stuck' ? 'stuck' : h.status === 'done' ? 'done' : 'working')}`);
-  ['#aMain', '.more', '#cNote', '#composer'].forEach((q) => $(q).classList.add('hidden'));
+  ['#aMain', '.more', '#cNote', '#composer', '#broodTray'].forEach((q) => $(q).classList.add('hidden'));
   const box = $('#msgs'); box._html = ''; box._first = true;
   box.innerHTML = '<div class="msg note-line">loading…</div>';
   loadMsgs();
@@ -568,6 +676,7 @@ async function loadMsgs() {
   try {
     const data = await api(sub ? `/api/sub/${id}/${sub}?limit=${ui.limit}` : `/api/convo/${id}?limit=${ui.limit}`);
     if (ui.sel === id && ui.sub === sub) renderMsgs(data);
+    if (!sub) loadBrood();
   } catch (e) {
     if (ui.sel === id) {
       const c = cur();
@@ -581,6 +690,7 @@ function openConvo(id) {
   if (!c) return;
   leaveSub();
   ui.sel = id; ui.limit = 250;
+  resetTray();
   show('chat');
   const box = $('#msgs'); box._html = ''; box._first = true;
   box.innerHTML = '<div class="msg note-line">loading…</div>';
@@ -794,8 +904,8 @@ document.addEventListener('click', async (e) => {
     }
     return;
   }
-  const baby = e.target.closest('.crab.baby');
-  if (baby) { openSub(baby.dataset.sub); return; }
+  const baby = e.target.closest('[data-sub]');
+  if (baby) { openBaby(baby.dataset.sub); return; }
   const r = e.target.closest('.crab, .row');
   if (r) { openConvo(r.dataset.id); return; }
   if (e.target.id === 'napsLink') { show('chats'); return; }
@@ -847,7 +957,8 @@ $('#aMain').onclick = async () => {
   const c = cur(); if (!c || !c.live) return;
   try { const r = await api('/api/focus', { pid: c.live.pid }); toast(r.how === 'terminal' ? 'switched to its terminal tab' : `opened ${whereLabel(c.live)}`); } catch (e) { toast(e.message); }
 };
-$('#back').onclick = () => show(ui.prevView);
+// from a baby's full view, back goes to its mom's chat
+$('#back').onclick = () => (ui.sub ? openConvo(ui.sel) : show(ui.prevView));
 $('#aGroup').addEventListener('change', async (e) => {
   let v = e.target.value;
   if (v === '__new') { const g = await newGroup(); v = g ? g.id : (cur().group || ''); }

@@ -488,6 +488,22 @@ async function handleApi(req, res, url) {
     return send(res, 200, { total: items.length, start, description: sub.description, finished: sub.finished, items: items.slice(start).map(({ msgId, id, ...rest }) => rest) });
   }
 
+  // every baby a chat has had, for the container in that chat
+  const broodMatch = url.pathname.match(/^\/api\/brood\/([0-9a-f-]{36})$/);
+  if (req.method === 'GET' && broodMatch) {
+    const meta = t.findTranscript(broodMatch[1]);
+    if (!meta) return send(res, 404, { error: 'not found' });
+    const seen = new Set((readState().convos[meta.id] || {}).seenBabies || []);
+    return send(res, 200, { babies: t.helpers(meta, { seen, since: babySince, all: true }).slice(-30) });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/brood/seen') {
+    const b = await readBody(req);
+    const meta = UUID.test(b.id || '') && t.findTranscript(b.id);
+    if (!meta) return send(res, 404, { error: 'not found' });
+    for (const h of helpersOf(meta, readState())) if (h.status === 'done') markBabySeen(meta.id, h.id);
+    return send(res, 200, { ok: true });
+  }
+
   const convoMatch = url.pathname.match(/^\/api\/convo\/([0-9a-f-]{36})$/);
   if (req.method === 'GET' && convoMatch) {
     const meta = t.findTranscript(convoMatch[1]);
